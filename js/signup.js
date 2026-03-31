@@ -357,21 +357,50 @@ function updatePinUI() {
   if (nextDigit) nextDigit.classList.add('active');
 }
 
-// ── FACE CAPTURE ─────────────────────────
+// ── FACE CAPTURE (FIXED) ─────────────────
+// Collects up to 5 descriptor samples and averages them.
+// This produces a more stable reference vector that tolerates
+// lighting changes better at login time.
+const _faceCaptureSamples = [];
+const FACE_CAPTURE_TARGET = 5;   // collect 5 frames before averaging
+
 async function captureFace() {
   if (!state.modelsLoaded) return;
   try {
+    // FIX: lower scoreThreshold to match login detector settings
+    const options = new faceapi.TinyFaceDetectorOptions({
+      inputSize: 320,
+      scoreThreshold: 0.35,
+    });
+
     const detection = await faceapi
-      .detectSingleFace(webcamEl, new faceapi.TinyFaceDetectorOptions())
+      .detectSingleFace(webcamEl, options)
       .withFaceLandmarks()
       .withFaceDescriptor();
 
     if (detection) {
-      state.faceDescriptor = Array.from(detection.descriptor);
-      setStatus('ready', 'Face captured + Hand tracking active ✓');
+      _faceCaptureSamples.push(detection.descriptor);
+
+      if (_faceCaptureSamples.length < FACE_CAPTURE_TARGET) {
+        setStatus('loading',
+          `Capturing face sample ${_faceCaptureSamples.length}/${FACE_CAPTURE_TARGET} — hold still...`);
+        setTimeout(captureFace, 600);
+        return;
+      }
+
+      // Average all samples for a more robust descriptor
+      const len = _faceCaptureSamples[0].length;
+      const avg = new Float32Array(len);
+      for (const sample of _faceCaptureSamples) {
+        for (let i = 0; i < len; i++) avg[i] += sample[i];
+      }
+      for (let i = 0; i < len; i++) avg[i] /= _faceCaptureSamples.length;
+
+      state.faceDescriptor = Array.from(avg);
+      setStatus('ready', `Face enrolled (${FACE_CAPTURE_TARGET} samples) + Hand tracking ✓`);
     } else {
+      setStatus('loading', 'Looking for your face — sit in front of the camera, ensure good lighting');
       setTimeout(captureFace, 2000);
-      setStatus('loading', 'Looking for your face — sit in front of the camera');
     }
   } catch (e) {
     setTimeout(captureFace, 3000);
