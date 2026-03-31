@@ -701,150 +701,156 @@ function startVoice() {
   recognition.start();
 }
 
-// ══════════════════════════════════════════
-//  AI IMAGE GENERATION
-//  Uses Pollinations.ai — 100% free, no API key,
-//  sketch-aware prompt built from canvas + description
-// ══════════════════════════════════════════
+// ── AI GENERATION ─────────────────────────────────────────────────────────
 
-const LOADING_MESSAGES = [
-  'Analysing your sketch…',
-  'Painting with AI…',
-  'Dreaming up your art…',
-  'Rendering pixels…',
-  'Almost there…',
-];
+// Save/load Anthropic key
+const savedKey = localStorage.getItem('anthropic-key');
+if (savedKey) document.getElementById('anthropic-key').value = savedKey;
+
+document.getElementById('btn-save-token')?.addEventListener('click', () => {
+  const key = document.getElementById('anthropic-key').value.trim();
+  if (key) {
+    localStorage.setItem('anthropic-key', key);
+    document.getElementById('btn-save-token').textContent = '✓ Saved';
+    setTimeout(() => document.getElementById('btn-save-token').textContent = 'Save', 2000);
+  }
+});
+
+function isCanvasBlank(canvas) {
+  const ctx = canvas.getContext('2d');
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] > 0) return false;  // found non-transparent pixel
+  }
+  return true;
+}
+
+async function analyzeSketchWithClaude(base64Image, userDescription) {
+  const apiKey = document.getElementById('anthropic-key').value.trim()
+    || localStorage.getItem('anthropic-key') || '';
+
+  if (!apiKey) {
+    // No key — fall back to a generic prompt
+    return userDescription || 'a creative colorful artwork, vibrant colors';
+  }
+
+  const textPrompt = userDescription
+    ? `I drew this sketch. My description: "${userDescription}". Create a detailed, vivid image generation prompt that combines my sketch and description. Return ONLY the prompt, no explanation.`
+    : `Analyze this hand-drawn sketch and create a detailed image generation prompt describing what you see. Include shapes, objects, colors, composition, and artistic style. Return ONLY the prompt text, no explanation.`;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: base64Image }
+          },
+          { type: 'text', text: textPrompt }
+        ]
+      }]
+    })
+  });
+
+  if (!response.ok) {
+    console.warn('Claude API error:', response.status);
+    return userDescription || 'a creative colorful artwork';
+  }
+
+  const data = await response.json();
+  return data.content?.[0]?.text?.trim() || userDescription || 'a creative colorful artwork';
+}
 
 async function generateAI() {
-  const desc = aiDescEl.value.trim();
+  const drawCanvas = document.getElementById('draw-canvas');
+  const description = (document.getElementById('ai-description')?.value || '').trim();
+  const style = document.getElementById('ai-style-select')?.value || 'digital art, highly detailed';
 
-  // Snapshot the current sketch and description for gallery
-  S.lastSketch = drawCanvas.toDataURL('image/png');
-  S.lastDesc   = desc || '(no description)';
+  const blank = isCanvasBlank(drawCanvas);
 
-  // Build a sketch-aware prompt from canvas content + description
-  const prompt = buildSketchPrompt(desc);
-
-  // UI: show loading
-  aiPlaceholder.style.display = 'none';
-  aiResultImg.style.display   = 'none';
-  aiActions.style.display     = 'none';
-  aiLoading.style.display     = 'flex';
-  btnGenerate.disabled        = true;
-
-  let msgIdx = 0;
-  aiLoadingText.textContent = LOADING_MESSAGES[0];
-  const msgInterval = setInterval(() => {
-    msgIdx = (msgIdx + 1) % LOADING_MESSAGES.length;
-    aiLoadingText.textContent = LOADING_MESSAGES[msgIdx];
-  }, 2500);
-
-  try {
-    const url = await pollinationsGenerate(prompt);
-    S.lastGenerated = url;
-    aiResultImg.src = url;
-    aiResultImg.onload = () => {
-      aiLoading.style.display   = 'none';
-      aiResultImg.style.display = 'block';
-      aiActions.style.display   = 'flex';
-      showToast('✨ AI art generated!');
-    };
-    aiResultImg.onerror = () => {
-      // Image URL is valid but browser blocked load — show directly anyway
-      aiLoading.style.display   = 'none';
-      aiResultImg.style.display = 'block';
-      aiActions.style.display   = 'flex';
-    };
-  } catch (err) {
-    console.error('[AI gen]', err);
-    aiLoading.style.display     = 'none';
-    aiPlaceholder.style.display = 'flex';
-    showToast('⚠️ ' + err.message);
-  } finally {
-    clearInterval(msgInterval);
-    btnGenerate.disabled = false;
+  if (blank && !description) {
+    alert('Please draw something on the canvas or write a description first!');
+    return;
   }
-}
 
-// ── Pollinations.ai — free, no key, CORS-safe ─────────────────────────────
-// model=flux gives the best sketch-to-realistic results
-async function pollinationsGenerate(prompt) {
-  const seed    = Math.floor(Math.random() * 999999);
-  const encoded = encodeURIComponent(prompt);
-  const url = `https://image.pollinations.ai/prompt/${encoded}?model=flux&width=768&height=768&seed=${seed}&nologo=true&enhance=true`;
+  // Show loading
+  document.getElementById('ai-placeholder').style.display = 'none';
+  document.getElementById('ai-result-img').style.display = 'none';
+  document.getElementById('ai-actions').style.display = 'none';
+  document.getElementById('ai-loading').style.display = 'flex';
+  document.getElementById('btn-generate').disabled = true;
 
-  // Verify the request actually reaches Pollinations before resolving
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('Timed out after 90s — check your connection')), 90000);
-    const img = new Image();
-    img.onload  = () => { clearTimeout(timeout); resolve(url); };
-    img.onerror = () => { clearTimeout(timeout); resolve(url); }; // resolve anyway — URL is still valid
-    img.src = url;
-  });
-}
+  const updateLoadingText = (text) => {
+    const el = document.getElementById('ai-loading-text');
+    if (el) el.textContent = text;
+  };
 
-// Build a rich prompt from canvas sketch + optional description
-function buildSketchPrompt(desc) {
-  // Sample the canvas to detect dominant colors used
-  const colors = sampleCanvasColors();
-
-  let subject = desc
-    ? desc
-    : 'a detailed scene based on the sketch';
-
-  const colorHint = colors.length > 0
-    ? `with colors including ${colors.join(', ')}`
-    : '';
-
-  return [
-    `A highly realistic, detailed digital painting of ${subject}`,
-    colorHint,
-    'inspired by a hand-drawn sketch',
-    'photorealistic rendering, cinematic lighting, sharp focus',
-    '8k resolution, masterpiece quality',
-  ].filter(Boolean).join(', ');
-}
-
-// Sample the drawing canvas and return the top 3 non-white, non-black color names
-function sampleCanvasColors() {
   try {
-    const w = drawCanvas.width, h = drawCanvas.height;
-    const data = drawCtx.getImageData(0, 0, w, h).data;
-    const counts = {};
-    const step = 8; // sample every 8th pixel for speed
-    for (let i = 0; i < data.length; i += 4 * step) {
-      const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
-      if (a < 200) continue; // skip transparent
-      if (r > 240 && g > 240 && b > 240) continue; // skip white bg
-      if (r < 20  && g < 20  && b < 20)  continue; // skip black
-      const bucket = `${Math.round(r/40)*40},${Math.round(g/40)*40},${Math.round(b/40)*40}`;
-      counts[bucket] = (counts[bucket] || 0) + 1;
+    let finalPrompt = '';
+
+    if (!blank) {
+      updateLoadingText('Reading your sketch…');
+      const base64 = drawCanvas.toDataURL('image/png').split(',')[1];
+      finalPrompt = await analyzeSketchWithClaude(base64, description);
+    } else {
+      finalPrompt = description;
     }
-    // Sort by frequency, take top 3, name them
-    const top = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0,3);
-    return top.map(([bucket]) => {
-      const [r,g,b] = bucket.split(',').map(Number);
-      if (r > g && r > b) return 'red';
-      if (g > r && g > b) return 'green';
-      if (b > r && b > g) return 'blue';
-      if (r > 180 && g > 100 && b < 80) return 'orange';
-      if (r > 150 && b > 150 && g < 100) return 'purple';
-      if (r > 180 && g > 180 && b < 80) return 'yellow';
-      return 'colorful';
-    }).filter((v,i,a) => a.indexOf(v) === i); // dedupe
-  } catch(e) {
-    return [];
+
+    // Append style
+    finalPrompt = `${finalPrompt}, ${style}`;
+    updateLoadingText('Generating image…');
+
+    // Generate with Pollinations.ai — free, fast, no key needed
+    const seed = Math.floor(Math.random() * 99999);
+    const encoded = encodeURIComponent(finalPrompt);
+    const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&seed=${seed}&model=flux`;
+
+    await new Promise((resolve, reject) => {
+      const img = document.getElementById('ai-result-img');
+      const timeout = setTimeout(() => reject(new Error('Timeout')), 60000);
+
+      img.onload = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+      img.onerror = () => {
+        clearTimeout(timeout);
+        reject(new Error('Image load failed'));
+      };
+      img.src = imageUrl;
+    });
+
+    // Show result
+    document.getElementById('ai-loading').style.display = 'none';
+    document.getElementById('ai-result-img').style.display = 'block';
+    document.getElementById('ai-actions').style.display = 'flex';
+
+  } catch (err) {
+    console.error('Generation error:', err);
+    document.getElementById('ai-loading').style.display = 'none';
+    document.getElementById('ai-placeholder').style.display = 'flex';
+    document.getElementById('ai-placeholder').innerHTML =
+      `<span style="color:#EF4444">❌ Failed: ${err.message}. Try again!</span>`;
+  } finally {
+    document.getElementById('btn-generate').disabled = false;
   }
 }
 
-function saveAIImage() {
-  if (!S.lastGenerated) return;
-  const link  = document.createElement('a');
-  link.href   = S.lastGenerated;
-  link.download = 'airbrush-ai-art.png';
-  link.click();
-}
+// Wire up the generate button
+document.getElementById('btn-generate').addEventListener('click', generateAI);
 
+// Retry button
+document.getElementById('btn-retry-ai')?.addEventListener('click', generateAI);
 // ══════════════════════════════════════════
 //  GALLERY
 // ══════════════════════════════════════════
