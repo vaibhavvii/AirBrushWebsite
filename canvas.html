@@ -46,7 +46,7 @@
     </div>
     <div class="nav-right">
       <span class="nav-user" id="nav-user">👤 Guest</span>
-      <a href="my-gallery.html" class="btn-nav-ghost">My Gallery</a>
+      <a href="my-gallery.html" class="btn-nav-ghost" id="btn-open-gallery">My Gallery</a>
       <button class="btn-nav-ghost" id="btn-logout">Sign Out</button>
     </div>
   </nav>
@@ -110,7 +110,6 @@
           <div class="gesture-item"><span>👌</span><span>Pinch = Draw</span></div>
           <div class="gesture-item"><span>✌️</span><span>Peace = Eraser</span></div>
           <div class="gesture-item"><span>🖐</span><span>Palm = Stop</span></div>
-          <div class="gesture-item"><span>✊</span><span>Fist shake = Undo</span></div>
         </div>
       </div>
     </aside>
@@ -178,6 +177,7 @@
           <img id="ai-result-img" class="ai-result-img" style="display:none" alt="AI generated art"/>
           <div class="ai-actions" id="ai-actions" style="display:none">
             <button class="ai-action-btn" id="btn-save-ai">⬇ Save AI</button>
+            <button class="ai-action-btn gallery-btn" id="btn-add-gallery">🖼 Add to Gallery</button>
             <button class="ai-action-btn" id="btn-retry-ai">🔄 Retry</button>
           </div>
         </div>
@@ -185,6 +185,19 @@
     </div>
 
   </div><!-- /canvas-layout -->
+
+  <!-- GALLERY MODAL -->
+  <div class="gallery-modal" id="gallery-modal" style="display:none;">
+    <div class="gallery-modal-inner">
+      <div class="gallery-modal-header">
+        <h2>🖼 My Gallery</h2>
+        <button class="gallery-close" id="gallery-close">✕</button>
+      </div>
+      <div class="gallery-grid" id="gallery-grid">
+        <div class="gallery-empty" id="gallery-empty">No images yet — generate some AI art!</div>
+      </div>
+    </div>
+  </div>
 
   <script src="js/canvas.js"></script>
 </body>
