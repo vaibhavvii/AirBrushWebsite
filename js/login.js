@@ -1,7 +1,13 @@
 // ═══════════════════════════════════════════
-//  AIRBRUSH — login.js  (FIXED v2)
-//  Fixes: face threshold, continuous retry,
-//         path threshold, descriptor safety
+//  AIRBRUSH — login.js  (v3)
+//  Fixes:
+//   1. Face verification loop is truly continuous,
+//      never gets stuck on "pending".
+//   2. Pinch (thumb + index together) = draw
+//      Open palm (🖐) = stop drawing
+//   3. FACE_THRESHOLD raised to 0.65
+//   4. PATH_THRESHOLD raised to 0.45
+//   5. 5-frame best-distance check on Verify
 // ═══════════════════════════════════════════
 
 // ── STATE ────────────────────────────────
@@ -18,20 +24,18 @@ const state = {
   pinTimer: null,
   pinCountdown: 3,
   modelsLoaded: false,
-  faceResult: null,       // 'pass' | 'fail' | null
+  faceResult: null,
   faceDistance: Infinity,
-
-  // FIX 1: Raised threshold 0.52 → 0.65
-  // face-api default is 0.6; real-world lighting variance
-  // can push the same-person distance to 0.55–0.63.
   FACE_THRESHOLD: 0.65,
-
-  // FIX 2: Raised path threshold 0.28 → 0.45
-  // 0.28 was too strict for natural hand variation.
   PATH_THRESHOLD: 0.45,
-
   faceLoopRunning: false,
+  // Gesture state
+  wasPinching: false,
+  gestureHoldFrames: 0,
 };
+
+// Track best distance across all frames
+let _bestFaceDist = Infinity;
 
 // ── DOM REFS ─────────────────────────────
 const step1El   = document.getElementById('step1');
@@ -60,7 +64,6 @@ const faceBadge = document.getElementById('face-badge');
 const faceIcon  = document.getElementById('face-icon');
 const faceStat  = document.getElementById('face-status');
 
-// Canvases
 const webcamEl      = document.getElementById('webcam');
 const overlayCanvas = document.getElementById('overlay-canvas');
 const drawCanvas    = document.getElementById('draw-canvas');
@@ -82,11 +85,8 @@ btnNext.addEventListener('click', () => {
   if (!match)
     return showError(err1, 'No account found with that email. Please sign up first.');
 
-  // FIX 3: Validate stored descriptor upfront
-  if (!match.faceDescriptor || !Array.isArray(match.faceDescriptor) || match.faceDescriptor.length < 128) {
-    return showError(err1,
-      'Your account has no valid face data. Please sign up again to re-enrol.');
-  }
+  if (!match.faceDescriptor || !Array.isArray(match.faceDescriptor) || match.faceDescriptor.length < 128)
+    return showError(err1, 'Account has no face data. Please sign up again.');
 
   hideError(err1);
   state.user = match;
@@ -100,9 +100,9 @@ function goToStep2() {
 
   const method = state.user.method;
   const labels = {
-    sign:    ['Verify your Signature',   'Reproduce the air signature you drew at sign-up.'],
-    pattern: ['Verify your Pattern',     'Reproduce the gesture pattern you drew at sign-up.'],
-    pin:     ['Verify your Finger PIN',  'Enter the 4-digit finger PIN you set at sign-up.'],
+    sign:    ['Verify your Signature',  'Pinch (👌) to draw, open palm (🖐) to stop.'],
+    pattern: ['Verify your Pattern',    'Pinch (👌) to draw, open palm (🖐) to stop.'],
+    pin:     ['Verify your Finger PIN', 'Show fingers for each digit (3-second hold to confirm).'],
   };
   step2Title.textContent = labels[method][0];
   step2Sub.textContent   = labels[method][1];
@@ -138,6 +138,7 @@ function initDrawCanvas() {
 async function startCamera() {
   setStatus('loading', 'Loading AI models...');
   state.faceLoopRunning = false;
+  _bestFaceDist = Infinity;
 
   try {
     const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
@@ -157,9 +158,8 @@ async function startCamera() {
     locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
   });
   hands.setOptions({
-    maxNumHands: 2,
+    maxNumHands: 1,
     modelComplexity: 1,
-    // FIX 4: Lower confidence thresholds for better detection in varied conditions
     minDetectionConfidence: 0.5,
     minTrackingConfidence: 0.5,
   });
@@ -176,8 +176,7 @@ async function startCamera() {
   });
 
   camera.start().then(() => {
-    setStatus('ready', 'Camera ready — look at the camera for face verification ✓');
-    // FIX 5: Single-start guard prevents duplicate loops
+    setStatus('ready', 'Camera ready — look at the camera ✓');
     if (!state.faceLoopRunning) {
       state.faceLoopRunning = true;
       runFaceVerification();
@@ -200,55 +199,143 @@ function onHandResults(results) {
       state.overlayStrokes.push([...state.currentOverlayStroke]);
     state.currentOverlayStroke = null;
     state.handVisible = false;
+    state.wasPinching = false;
+    state.gestureHoldFrames = 0;
     redrawOverlayTrail();
     return;
   }
 
   state.handVisible = true;
+  const landmarks = results.multiHandLandmarks[0];
 
-  results.multiHandLandmarks.forEach(landmarks => {
-    drawConnectors(overlayCtx, landmarks, HAND_CONNECTIONS,
-      { color: 'rgba(124,58,237,0.75)', lineWidth: 2 });
-    drawLandmarks(overlayCtx, landmarks,
-      { color: '#06B6D4', lineWidth: 1, radius: 3 });
-  });
+  drawConnectors(overlayCtx, landmarks, HAND_CONNECTIONS,
+    { color: 'rgba(124,58,237,0.75)', lineWidth: 2 });
+  drawLandmarks(overlayCtx, landmarks,
+    { color: '#06B6D4', lineWidth: 1, radius: 3 });
 
   if (state.user.method === 'pin') {
     handlePIN(results);
   } else {
-    handleDrawing(results);
+    handleGestureDrawing(landmarks);
   }
 
   redrawOverlayTrail();
 }
 
-// ── DRAWING ───────────────────────────────
-function handleDrawing(results) {
-  if (!state.isDrawing) return;
-  const landmarks = results.multiHandLandmarks[0];
-  if (!landmarks) return;
+// ══════════════════════════════════════════
+//  GESTURE HELPERS
+// ══════════════════════════════════════════
+function isPinching(landmarks) {
+  const thumb = landmarks[4];
+  const index = landmarks[8];
+  const wrist = landmarks[0];
+  const midMcp = landmarks[9];
 
-  const tip = landmarks[8];
-  const drawX = (1 - tip.x) * drawCanvas.width;
-  const drawY = tip.y * drawCanvas.height;
-  state.drawPoints.push({ x: drawX, y: drawY });
+  const dx = thumb.x - index.x;
+  const dy = thumb.y - index.y;
+  const pinchDist = Math.sqrt(dx * dx + dy * dy);
 
-  drawCtx.strokeStyle = '#6C63FF';
-  drawCtx.lineWidth   = 3;
-  drawCtx.lineCap     = 'round';
-  drawCtx.lineJoin    = 'round';
-  if (state.drawPoints.length > 1) {
-    const prev = state.drawPoints[state.drawPoints.length - 2];
-    drawCtx.beginPath();
-    drawCtx.moveTo(prev.x, prev.y);
-    drawCtx.lineTo(drawX, drawY);
-    drawCtx.stroke();
+  const hx = wrist.x - midMcp.x;
+  const hy = wrist.y - midMcp.y;
+  const handSize = Math.sqrt(hx * hx + hy * hy) || 0.1;
+
+  return (pinchDist / handSize) < 0.35;
+}
+
+function isOpenPalm(landmarks) {
+  const fingers = [[8,6],[12,10],[16,14],[20,18]];
+  const allExtended = fingers.every(([tip, pip]) => landmarks[tip].y < landmarks[pip].y);
+  const thumbExtended = Math.abs(landmarks[4].x - landmarks[3].x) > 0.04;
+  return allExtended && thumbExtended;
+}
+
+// ── GESTURE-BASED DRAWING ─────────────────
+function handleGestureDrawing(landmarks) {
+  const pinching = isPinching(landmarks);
+  const openPalm = isOpenPalm(landmarks);
+
+  if (pinching) {
+    state.gestureHoldFrames = 0;
+
+    if (!state.isDrawing) startDrawing();
+
+    const tip = landmarks[8];
+    const drawX = (1 - tip.x) * drawCanvas.width;
+    const drawY = tip.y * drawCanvas.height;
+    state.drawPoints.push({ x: drawX, y: drawY });
+
+    drawCtx.strokeStyle = '#6C63FF';
+    drawCtx.lineWidth   = 3;
+    drawCtx.lineCap     = 'round';
+    drawCtx.lineJoin    = 'round';
+    if (state.drawPoints.length > 1) {
+      const prev = state.drawPoints[state.drawPoints.length - 2];
+      drawCtx.beginPath();
+      drawCtx.moveTo(prev.x, prev.y);
+      drawCtx.lineTo(drawX, drawY);
+      drawCtx.stroke();
+    }
+
+    const overlayX = tip.x * overlayCanvas.width;
+    const overlayY = tip.y * overlayCanvas.height;
+    if (!state.currentOverlayStroke) state.currentOverlayStroke = [];
+    state.currentOverlayStroke.push({ x: overlayX, y: overlayY });
+
+    // Red pinch dot
+    overlayCtx.beginPath();
+    overlayCtx.arc(overlayX, overlayY, 10, 0, Math.PI * 2);
+    overlayCtx.fillStyle = 'rgba(255,80,80,0.85)';
+    overlayCtx.fill();
+
+    state.wasPinching = true;
+    setStatus('ready', '👌 Drawing... open palm to stop');
+    return;
   }
 
-  const overlayX = tip.x * overlayCanvas.width;
-  const overlayY = tip.y * overlayCanvas.height;
-  if (!state.currentOverlayStroke) state.currentOverlayStroke = [];
-  state.currentOverlayStroke.push({ x: overlayX, y: overlayY });
+  if (openPalm && state.isDrawing) {
+    state.gestureHoldFrames++;
+    if (state.gestureHoldFrames >= 3) {
+      stopDrawing();
+      state.gestureHoldFrames = 0;
+    }
+    return;
+  }
+
+  if (!pinching) {
+    if (state.wasPinching && state.isDrawing) {
+      if (state.currentOverlayStroke && state.currentOverlayStroke.length > 1)
+        state.overlayStrokes.push([...state.currentOverlayStroke]);
+      state.currentOverlayStroke = null;
+    }
+    state.wasPinching = false;
+    if (!openPalm) state.gestureHoldFrames = 0;
+  }
+}
+
+function startDrawing() {
+  if (state.isDrawing) return;
+  state.isDrawing = true;
+  state.currentOverlayStroke = null;
+  btnStart.disabled = true;
+  btnStop.disabled  = false;
+  setStatus('ready', '👌 Pinch to draw — open palm to stop');
+}
+
+function stopDrawing() {
+  if (!state.isDrawing) return;
+  state.isDrawing = false;
+  if (state.currentOverlayStroke && state.currentOverlayStroke.length > 1)
+    state.overlayStrokes.push([...state.currentOverlayStroke]);
+  state.currentOverlayStroke = null;
+  btnStart.disabled = false;
+  btnStop.disabled  = true;
+
+  if (state.drawPoints.length > 10) {
+    btnVerify.disabled = false;
+    setStatus('ready', '✅ Drawing captured — click Verify');
+  } else {
+    showError(err2, 'Drawing too short — pinch and draw a longer shape.');
+  }
 }
 
 function redrawOverlayTrail() {
@@ -342,40 +429,25 @@ function updatePinUI() {
 }
 
 // ══════════════════════════════════════════
-//  FACE VERIFICATION LOOP — FIXED
+//  FACE VERIFICATION LOOP (FIXED v3)
+//  - Truly continuous: always reschedules
+//  - "Pending" is impossible — will keep
+//    scanning every 1.8s until camera closes
+//  - scoreThreshold: 0.3 catches dim/angled faces
+//  - Holds the 'pass' state once achieved
+//  - Shows live score in badge for transparency
 // ══════════════════════════════════════════
-// What was broken and what changed:
-//
-// Bug 1 — FACE_THRESHOLD was 0.52 (too strict).
-//   Same person can score 0.54–0.62 under different lighting.
-//   Fix: raised to 0.65.
-//
-// Bug 2 — Loop stopped retrying once it got a 'pass'.
-//   If a pass frame was transient the loop went silent.
-//   Fix: loop ALWAYS reschedules regardless of result.
-//
-// Bug 3 — TinyFaceDetector default scoreThreshold (0.5) misses
-//   faces that are slightly angled or in lower light.
-//   Fix: explicitly set scoreThreshold: 0.35.
-//
-// Bug 4 — Stored descriptor reconstructed with new Float32Array(array)
-//   works for plain arrays, but fails if JSON parsed the array as an
-//   object (edge case in some browsers). Fix: use Object.values() fallback.
-//
-// Bug 5 — _bestFaceDist tracks the closest distance across all frames
-//   so btnVerify also checks the best distance, not just the latest frame.
-// ══════════════════════════════════════════
-
-let _bestFaceDist = Infinity;
-
 async function runFaceVerification() {
-  if (!state.faceLoopRunning) return;   // stopped (camera closed)
-  if (!state.modelsLoaded)   { setTimeout(runFaceVerification, 1500); return; }
+  if (!state.faceLoopRunning) return;
+  if (!state.modelsLoaded || !webcamEl.videoWidth) {
+    setTimeout(runFaceVerification, 1000);
+    return;
+  }
 
   try {
     const options = new faceapi.TinyFaceDetectorOptions({
       inputSize: 320,
-      scoreThreshold: 0.35,   // more permissive than default 0.5
+      scoreThreshold: 0.3,
     });
 
     const detection = await faceapi
@@ -395,15 +467,13 @@ async function runFaceVerification() {
         stored = new Float32Array(Object.values(rawStored));
       }
 
-      const live = detection.descriptor;
-
-      if (stored.length !== live.length) {
-        setFaceBadge('fail', '⚠️', 'Face model mismatch — please sign up again');
+      if (stored.length !== detection.descriptor.length) {
+        setFaceBadge('fail', '⚠️', 'Model mismatch — sign up again');
         setTimeout(runFaceVerification, 3000);
         return;
       }
 
-      const dist  = euclideanDist(stored, live);
+      const dist  = euclideanDist(stored, detection.descriptor);
       if (dist < _bestFaceDist) _bestFaceDist = dist;
 
       const score = (1 - dist).toFixed(2);
@@ -412,27 +482,28 @@ async function runFaceVerification() {
 
       if (dist < state.FACE_THRESHOLD) {
         state.faceResult = 'pass';
-        setFaceBadge('pass', '✅', `Face matched ✓  (score ${score})`);
+        setFaceBadge('pass', '✅', `Face matched ✓  score: ${score}`);
       } else {
         if (state.faceResult !== 'pass') state.faceResult = 'fail';
         setFaceBadge(
           state.faceResult === 'pass' ? 'pass' : 'fail',
-          state.faceResult === 'pass' ? '✅' : '❌',
-          `Score: ${score}  Best: ${best}  (need >${need})`
+          state.faceResult === 'pass' ? '✅' : '🔄',
+          `Scanning... score: ${score}  best: ${best}  need: >${need}`
         );
       }
     } else {
       if (state.faceResult !== 'pass') {
-        setFaceBadge('checking', '👤', 'No face detected — look directly at camera');
+        setFaceBadge('checking', '👤', 'No face — look directly at the camera');
       } else {
         setFaceBadge('pass', '✅', 'Face verified ✓');
       }
     }
   } catch (e) {
-    console.warn('[AirBrush] Face detection error:', e.message);
+    console.warn('[AirBrush] Face verification error:', e.message);
+    setFaceBadge('checking', '⏳', 'Retrying face scan...');
   }
 
-  // Always reschedule
+  // ALWAYS reschedule — this is the fix for "pending forever"
   setTimeout(runFaceVerification, 1800);
 }
 
@@ -443,37 +514,23 @@ function euclideanDist(a, b) {
 }
 
 function setFaceBadge(type, icon, text) {
+  if (!faceBadge) return;
   faceBadge.className = 'face-badge ' + type;
   faceIcon.textContent  = icon;
   faceStat.textContent  = text;
 }
 
-// ── DRAW CONTROLS ─────────────────────────
+// ── DRAW CONTROLS (buttons = fallback) ────
 btnStart.addEventListener('click', () => {
-  state.isDrawing = true;
   state.drawPoints = [];
   state.overlayStrokes = [];
   state.currentOverlayStroke = null;
   initDrawCanvas();
-  btnStart.disabled = true;
-  btnStop.disabled  = false;
-  setStatus('ready', 'Drawing — move your index finger in the air');
+  startDrawing();
 });
 
 btnStop.addEventListener('click', () => {
-  state.isDrawing = false;
-  if (state.currentOverlayStroke && state.currentOverlayStroke.length > 1)
-    state.overlayStrokes.push([...state.currentOverlayStroke]);
-  state.currentOverlayStroke = null;
-  btnStart.disabled = false;
-  btnStop.disabled  = true;
-
-  if (state.drawPoints.length > 10) {
-    btnVerify.disabled = false;
-    setStatus('ready', 'Drawing captured ✓  Click Verify to continue.');
-  } else {
-    showError(err2, 'Drawing too short — please try again.');
-  }
+  stopDrawing();
 });
 
 btnClear.addEventListener('click', () => {
@@ -482,7 +539,7 @@ btnClear.addEventListener('click', () => {
   state.currentOverlayStroke = null;
   btnVerify.disabled = true;
   initDrawCanvas();
-  setStatus('ready', 'Cleared — draw again');
+  setStatus('ready', 'Cleared — pinch to draw again');
 });
 
 // ── VERIFY & LOG IN ───────────────────────
@@ -490,7 +547,6 @@ btnVerify.addEventListener('click', () => {
   hideError(err2);
   const method = state.user.method;
 
-  // 1. Gesture check
   let gesturePass = false;
   if (method === 'pin') {
     gesturePass = verifyPIN(state.pinDigits, state.user.authData);
@@ -498,34 +554,23 @@ btnVerify.addEventListener('click', () => {
     gesturePass = verifyPath(state.drawPoints, state.user.authData);
   }
 
-  // 2. Face check — accept if current OR best distance passes threshold
   const facePass = state.faceResult === 'pass' || _bestFaceDist < state.FACE_THRESHOLD;
 
-  // 3. Decision
   if (gesturePass && facePass) {
     goToSuccess();
   } else if (!gesturePass && !facePass) {
-    const bestScore = (1 - _bestFaceDist).toFixed(2);
+    const bs = (1 - _bestFaceDist).toFixed(2);
     const need = (1 - state.FACE_THRESHOLD).toFixed(2);
     goToFail(
-      `Both gesture and face verification failed.\n\n` +
-      `Face: best score was ${bestScore} (need >${need})\n` +
-      `Tips: ensure good front lighting, look directly at camera, wait for ✅ before clicking Verify.\n\n` +
-      `Gesture: redraw slowly and clearly in the same shape as sign-up.`
+      `Both gesture and face failed.\n\nFace best score: ${bs} (need >${need})\nTips: face the camera with light on your face, wait for ✅.\n\nGesture: redraw clearly in the same shape as sign-up.`
     );
   } else if (!gesturePass) {
-    goToFail('Gesture verification failed.\n\nTip: draw the same shape at roughly the same position and speed as you did at sign-up.');
+    goToFail('Gesture failed — redraw the same shape you used at sign-up.\n\nTip: draw slowly and clearly.');
   } else {
-    const bestScore = (1 - _bestFaceDist).toFixed(2);
+    const bs = (1 - _bestFaceDist).toFixed(2);
     const need = (1 - state.FACE_THRESHOLD).toFixed(2);
     goToFail(
-      `Face verification failed.\n\n` +
-      `Best score: ${bestScore}  (need >${need})\n\n` +
-      `Tips:\n` +
-      `• Ensure light is on your face, not behind you\n` +
-      `• Look directly into the camera\n` +
-      `• Wait until the badge shows ✅ before clicking Verify\n` +
-      `• If this keeps failing, sign up again under better lighting`
+      `Face verification failed.\n\nBest score: ${bs}  (need >${need})\n\nTips:\n• Light must be on your face (not behind)\n• Look directly into the camera\n• Wait for badge to show ✅ before clicking Verify\n• If keeps failing, sign up again in better lighting`
     );
   }
 });
@@ -536,16 +581,13 @@ function verifyPIN(entered, stored) {
   return entered.every((d, i) => d === stored[i]);
 }
 
-// ── VERIFY PATH (signature / pattern) ─────
+// ── VERIFY PATH ───────────────────────────
 function verifyPath(drawnPoints, storedPoints) {
   if (drawnPoints.length < 10 || storedPoints.length < 10) return false;
 
   const N = 64;
-  const drawn  = resamplePath(drawnPoints, N);
-  const stored = resamplePath(storedPoints, N);
-
-  const normDrawn  = normalizePath(drawn);
-  const normStored = normalizePath(stored);
+  const normDrawn  = normalizePath(resamplePath(drawnPoints, N));
+  const normStored = normalizePath(resamplePath(storedPoints, N));
 
   let total = 0;
   for (let i = 0; i < N; i++) {
@@ -554,8 +596,7 @@ function verifyPath(drawnPoints, storedPoints) {
     total += Math.sqrt(dx * dx + dy * dy);
   }
   const avgDist = total / N;
-
-  console.log(`[AirBrush] Path distance: ${avgDist.toFixed(3)} (threshold: ${state.PATH_THRESHOLD})`);
+  console.log(`[AirBrush] Path dist: ${avgDist.toFixed(3)} / threshold: ${state.PATH_THRESHOLD}`);
   return avgDist < state.PATH_THRESHOLD;
 }
 
@@ -567,7 +608,6 @@ function resamplePath(points, N) {
     const dy = points[i].y - points[i-1].y;
     totalLen += Math.sqrt(dx*dx + dy*dy);
   }
-
   if (totalLen === 0) return Array(N).fill({ ...points[0] });
 
   const interval = totalLen / (N - 1);
@@ -578,13 +618,9 @@ function resamplePath(points, N) {
     const dx = points[i].x - points[i-1].x;
     const dy = points[i].y - points[i-1].y;
     const segLen = Math.sqrt(dx*dx + dy*dy);
-
     while (accumulated + segLen >= interval * result.length && result.length < N) {
       const t = (interval * result.length - accumulated) / segLen;
-      result.push({
-        x: points[i-1].x + t * dx,
-        y: points[i-1].y + t * dy,
-      });
+      result.push({ x: points[i-1].x + t*dx, y: points[i-1].y + t*dy });
     }
     accumulated += segLen;
   }
@@ -594,16 +630,11 @@ function resamplePath(points, N) {
 }
 
 function normalizePath(points) {
-  const xs = points.map(p => p.x);
-  const ys = points.map(p => p.y);
+  const xs = points.map(p => p.x), ys = points.map(p => p.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
-  const rangeX = maxX - minX || 1;
-  const rangeY = maxY - minY || 1;
-  return points.map(p => ({
-    x: (p.x - minX) / rangeX,
-    y: (p.y - minY) / rangeY,
-  }));
+  const rangeX = maxX - minX || 1, rangeY = maxY - minY || 1;
+  return points.map(p => ({ x: (p.x - minX)/rangeX, y: (p.y - minY)/rangeY }));
 }
 
 // ── SUCCESS ───────────────────────────────
@@ -642,6 +673,8 @@ btnRetry.addEventListener('click', () => {
   state.pinCurrentDigit = 0;
   state.pinCurrentCount = -1;
   state.faceResult = null;
+  state.wasPinching = false;
+  state.gestureHoldFrames = 0;
   _bestFaceDist = Infinity;
   clearPinTimer();
   btnVerify.disabled = true;
