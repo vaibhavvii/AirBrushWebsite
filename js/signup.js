@@ -1,7 +1,12 @@
 // ═══════════════════════════════════════════
-//  AIRBRUSH — signup.js  (v2 — fixed)
-//  Fixes: mirrored webcam, draw on overlay,
-//         stop drawing when hand lifts
+//  AIRBRUSH — signup.js  (v3)
+//  Fixes:
+//   1. Face capture loop now runs continuously
+//      until a descriptor is stored — no more
+//      "pending forever" issue.
+//   2. Pinch (thumb + index together) = start drawing
+//      Open palm = stop drawing
+//      Start/Stop buttons still work as fallback.
 // ═══════════════════════════════════════════
 
 // ── STATE ────────────────────────────────
@@ -12,9 +17,9 @@ const state = {
   authData: null,
   faceDescriptor: null,
   isDrawing: false,
-  drawPoints: [],          // for draw-canvas (right panel)
-  overlayStrokes: [],      // completed strokes on webcam overlay
-  currentOverlayStroke: null, // active stroke on webcam overlay
+  drawPoints: [],
+  overlayStrokes: [],
+  currentOverlayStroke: null,
   handVisible: false,
   pinDigits: [],
   pinCurrentDigit: 0,
@@ -23,6 +28,11 @@ const state = {
   pinCountdown: 3,
   modelsLoaded: false,
   cameraReady: false,
+  faceLoopRunning: false,
+  // Gesture state
+  wasPinching: false,    // true when pinch was active last frame
+  wasOpenPalm: false,    // debounce open-palm stop
+  gestureHoldFrames: 0,  // frames held in current gesture
 };
 
 // ── DOM REFS ─────────────────────────────
@@ -49,19 +59,17 @@ const pinBox     = document.getElementById('pin-box');
 const drawCtrlEl = document.getElementById('draw-controls');
 const pinCtrlEl  = document.getElementById('pin-controls');
 
-// Canvas & video elements
+// Canvases
 const webcamEl      = document.getElementById('webcam');
 const overlayCanvas = document.getElementById('overlay-canvas');
 const drawCanvas    = document.getElementById('draw-canvas');
 const overlayCtx    = overlayCanvas.getContext('2d');
 const drawCtx       = drawCanvas.getContext('2d');
 
-// ── MIRROR THE WEBCAM SIDE ───────────────
-// Apply CSS mirror to video + overlay so it feels like a selfie camera
 webcamEl.style.transform      = 'scaleX(-1)';
 overlayCanvas.style.transform = 'scaleX(-1)';
 
-// ── STEP 1 ───────────────────────────────
+// ── STEP 1 ────────────────────────────────
 methodCards.forEach(card => {
   card.addEventListener('click', () => {
     methodCards.forEach(c => c.classList.remove('selected'));
@@ -72,15 +80,14 @@ methodCards.forEach(card => {
 
 btnNext.addEventListener('click', () => {
   const name  = inpName.value.trim();
-  const email = inpEmail.value.trim();
-
-  if (!name)  return showError(err1, 'Please enter your name.');
-  if (!email || !email.includes('@')) return showError(err1, 'Please enter a valid email.');
-  if (!state.method) return showError(err1, 'Please select an authentication method.');
+  const email = inpEmail.value.trim().toLowerCase();
+  if (!name)                  return showError(err1, 'Please enter your name.');
+  if (!email.includes('@'))   return showError(err1, 'Please enter a valid email.');
+  if (!state.method)          return showError(err1, 'Please choose an auth method.');
 
   const users = JSON.parse(localStorage.getItem('airbrush_users') || '[]');
   if (users.find(u => u.email === email))
-    return showError(err1, 'This email is already registered. Please log in.');
+    return showError(err1, 'An account with that email already exists. Please log in.');
 
   hideError(err1);
   state.name  = name;
@@ -88,27 +95,27 @@ btnNext.addEventListener('click', () => {
   goToStep2();
 });
 
-// ── STEP 2 ───────────────────────────────
+// ── STEP 2 ────────────────────────────────
 function goToStep2() {
   step1El.style.display = 'none';
   step2El.style.display = 'flex';
 
-  const titles = {
-    sign:    ['Set up your Air Signature', 'Draw your unique signature in the air using your index finger.'],
-    pattern: ['Set up your Air Pattern',   'Draw a secret pattern gesture in the air using your index finger.'],
-    pin:     ['Set up your Finger PIN',    'Raise fingers to input each digit. Both hands are summed automatically.'],
+  const labels = {
+    sign:    ['Set up your Signature',  'Pinch (👌 thumb + index together) to draw. Open palm (🖐) to stop.'],
+    pattern: ['Set up your Pattern',   'Pinch (👌 thumb + index together) to draw. Open palm (🖐) to stop.'],
+    pin:     ['Set up your Finger PIN', 'Show fingers to enter each digit (3-second hold to confirm).'],
   };
-  step2Title.textContent = titles[state.method][0];
-  step2Sub.textContent   = titles[state.method][1];
+  step2Title.textContent = labels[state.method][0];
+  step2Sub.textContent   = labels[state.method][1];
 
   if (state.method === 'pin') {
-    drawBox.style.display   = 'none';
-    pinBox.style.display    = 'block';
+    drawBox.style.display    = 'none';
+    pinBox.style.display     = 'block';
     drawCtrlEl.style.display = 'none';
     pinCtrlEl.style.display  = 'block';
   } else {
-    drawBox.style.display   = 'block';
-    pinBox.style.display    = 'none';
+    drawBox.style.display    = 'block';
+    pinBox.style.display     = 'none';
     drawCtrlEl.style.display = 'flex';
     pinCtrlEl.style.display  = 'none';
   }
@@ -117,7 +124,7 @@ function goToStep2() {
   startCamera();
 }
 
-// ── INIT DRAW CANVAS ─────────────────────
+// ── CANVAS INIT ───────────────────────────
 function initDrawCanvas() {
   drawCanvas.width  = drawCanvas.offsetWidth  || 400;
   drawCanvas.height = drawCanvas.offsetHeight || 300;
@@ -131,6 +138,7 @@ function initDrawCanvas() {
 // ── CAMERA & MEDIAPIPE ───────────────────
 async function startCamera() {
   setStatus('loading', 'Loading AI models...');
+  state.faceLoopRunning = false;
 
   try {
     const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
@@ -152,10 +160,10 @@ async function startCamera() {
   });
 
   hands.setOptions({
-    maxNumHands: 2,
+    maxNumHands: 1,
     modelComplexity: 1,
-    minDetectionConfidence: 0.7,
-    minTrackingConfidence: 0.7,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
   });
 
   hands.onResults(onHandResults);
@@ -172,13 +180,128 @@ async function startCamera() {
 
   camera.start().then(() => {
     state.cameraReady = true;
-    setStatus('ready', 'Camera ready — hand tracking active ✓');
-    setTimeout(captureFace, 2000);
+    setStatus('loading', 'Camera ready — scanning for your face...');
+    // Start face capture loop immediately
+    if (!state.faceLoopRunning) {
+      state.faceLoopRunning = true;
+      captureFaceLoop();
+    }
     if (state.method === 'pin') updatePinUI();
   }).catch(e => {
     setStatus('error', 'Camera access denied. Please allow webcam access.');
     showError(err2, 'Camera error: ' + e.message);
   });
+}
+
+// ══════════════════════════════════════════
+//  FACE CAPTURE LOOP (FIXED)
+//  Runs continuously every 800ms until face
+//  is successfully enrolled (5 samples).
+//  Shows live feedback in the status bar.
+// ══════════════════════════════════════════
+const _faceSamples = [];
+const FACE_TARGET  = 5;
+
+async function captureFaceLoop() {
+  if (!state.faceLoopRunning) return;
+
+  // Already enrolled — stop looping
+  if (state.faceDescriptor) return;
+
+  if (!state.modelsLoaded || !webcamEl.videoWidth) {
+    setTimeout(captureFaceLoop, 800);
+    return;
+  }
+
+  try {
+    const options = new faceapi.TinyFaceDetectorOptions({
+      inputSize: 320,
+      scoreThreshold: 0.3,   // permissive — works in dim/angled light
+    });
+
+    const detection = await faceapi
+      .detectSingleFace(webcamEl, options)
+      .withFaceLandmarks()
+      .withFaceDescriptor();
+
+    if (detection) {
+      _faceSamples.push(detection.descriptor);
+
+      if (_faceSamples.length < FACE_TARGET) {
+        setStatus('loading',
+          `📷 Face scan ${_faceSamples.length}/${FACE_TARGET} — hold still & look at camera...`);
+        setTimeout(captureFaceLoop, 500);
+        return;
+      }
+
+      // Average all samples → stable descriptor
+      const len = _faceSamples[0].length;
+      const avg = new Float32Array(len);
+      for (const s of _faceSamples) {
+        for (let i = 0; i < len; i++) avg[i] += s[i];
+      }
+      for (let i = 0; i < len; i++) avg[i] /= _faceSamples.length;
+
+      state.faceDescriptor = Array.from(avg);
+      setStatus('ready', '✅ Face enrolled! Now set up your ' +
+        (state.method === 'pin' ? 'PIN.' :
+         state.method === 'sign' ? 'signature — pinch to draw, open palm to stop.' :
+         'pattern — pinch to draw, open palm to stop.'));
+      return; // Done — no more looping
+    } else {
+      setStatus('loading',
+        '👤 Face not detected — face the camera with good lighting...');
+    }
+  } catch (e) {
+    console.warn('[AirBrush] Face scan error:', e.message);
+  }
+
+  // Retry
+  setTimeout(captureFaceLoop, 800);
+}
+
+// ══════════════════════════════════════════
+//  GESTURE HELPERS
+// ══════════════════════════════════════════
+
+/**
+ * isPinching: thumb tip (4) and index tip (8) close together.
+ * Distance < 8% of hand width (wrist→middle-mcp span).
+ */
+function isPinching(landmarks) {
+  const thumb = landmarks[4];
+  const index = landmarks[8];
+  const wrist = landmarks[0];
+  const midMcp = landmarks[9];
+
+  const dx = thumb.x - index.x;
+  const dy = thumb.y - index.y;
+  const pinchDist = Math.sqrt(dx * dx + dy * dy);
+
+  // normalise by hand size
+  const hx = wrist.x - midMcp.x;
+  const hy = wrist.y - midMcp.y;
+  const handSize = Math.sqrt(hx * hx + hy * hy) || 0.1;
+
+  return (pinchDist / handSize) < 0.35; // threshold tuned to feel natural
+}
+
+/**
+ * isOpenPalm: all 4 fingers AND thumb extended.
+ * Uses y-position of tips vs their PIP joints.
+ */
+function isOpenPalm(landmarks) {
+  // Finger tips and their PIP joints
+  const fingers = [
+    [8, 6],   // index
+    [12, 10], // middle
+    [16, 14], // ring
+    [20, 18], // pinky
+  ];
+  const allExtended = fingers.every(([tip, pip]) => landmarks[tip].y < landmarks[pip].y);
+  // thumb: tip x vs ip x (mirrored logic)
+  const thumbExtended = Math.abs(landmarks[4].x - landmarks[3].x) > 0.04;
+  return allExtended && thumbExtended;
 }
 
 // ── HAND RESULTS ─────────────────────────
@@ -187,77 +310,143 @@ function onHandResults(results) {
 
   const handDetected = results.multiHandLandmarks && results.multiHandLandmarks.length > 0;
 
-  // ── Hand lifted → end current stroke ──
   if (!handDetected) {
-    if (state.currentOverlayStroke && state.currentOverlayStroke.length > 1) {
+    // Lift ends current stroke
+    if (state.currentOverlayStroke && state.currentOverlayStroke.length > 1)
       state.overlayStrokes.push([...state.currentOverlayStroke]);
-    }
     state.currentOverlayStroke = null;
     state.handVisible = false;
-    redrawOverlayTrail(); // keep previous strokes visible
+    state.wasPinching = false;
+    state.wasOpenPalm = false;
+    state.gestureHoldFrames = 0;
+    redrawOverlayTrail();
     return;
   }
 
   state.handVisible = true;
+  const landmarks = results.multiHandLandmarks[0];
 
-  // Draw skeleton for each hand
-  results.multiHandLandmarks.forEach((landmarks) => {
-    drawConnectors(overlayCtx, landmarks, HAND_CONNECTIONS,
-      { color: 'rgba(124,58,237,0.75)', lineWidth: 2 });
-    drawLandmarks(overlayCtx, landmarks,
-      { color: '#06B6D4', lineWidth: 1, radius: 3 });
-  });
+  // Draw skeleton
+  drawConnectors(overlayCtx, landmarks, HAND_CONNECTIONS,
+    { color: 'rgba(124,58,237,0.75)', lineWidth: 2 });
+  drawLandmarks(overlayCtx, landmarks,
+    { color: '#06B6D4', lineWidth: 1, radius: 3 });
 
   if (state.method === 'pin') {
     handlePIN(results);
   } else {
-    handleDrawing(results);
+    handleGestureDrawing(landmarks);
   }
 
   redrawOverlayTrail();
 }
 
-// ── DRAW ON BOTH CANVASES ─────────────────
-function handleDrawing(results) {
-  if (!state.isDrawing) return;
+// ── GESTURE-BASED DRAWING ─────────────────
+function handleGestureDrawing(landmarks) {
+  const pinching  = isPinching(landmarks);
+  const openPalm  = isOpenPalm(landmarks);
 
-  const landmarks = results.multiHandLandmarks[0];
-  if (!landmarks) return;
+  // ── PINCH → Start / continue drawing ──
+  if (pinching) {
+    state.wasOpenPalm = false;
 
-  const tip = landmarks[8]; // index fingertip
+    if (!state.isDrawing) {
+      // Transition: not drawing → drawing
+      startDrawing();
+    }
 
-  // ── RIGHT PANEL: draw-canvas (manually mirrored so it reads left→right) ──
-  const drawX = (1 - tip.x) * drawCanvas.width;
-  const drawY = tip.y * drawCanvas.height;
+    // Draw at index fingertip position
+    const tip = landmarks[8];
+    const drawX = (1 - tip.x) * drawCanvas.width;
+    const drawY = tip.y * drawCanvas.height;
+    state.drawPoints.push({ x: drawX, y: drawY });
 
-  state.drawPoints.push({ x: drawX, y: drawY });
+    drawCtx.strokeStyle = '#6C63FF';
+    drawCtx.lineWidth   = 3;
+    drawCtx.lineCap     = 'round';
+    drawCtx.lineJoin    = 'round';
+    if (state.drawPoints.length > 1) {
+      const prev = state.drawPoints[state.drawPoints.length - 2];
+      drawCtx.beginPath();
+      drawCtx.moveTo(prev.x, prev.y);
+      drawCtx.lineTo(drawX, drawY);
+      drawCtx.stroke();
+    }
 
-  drawCtx.strokeStyle = '#6C63FF';
-  drawCtx.lineWidth   = 3;
-  drawCtx.lineCap     = 'round';
-  drawCtx.lineJoin    = 'round';
+    const overlayX = tip.x * overlayCanvas.width;
+    const overlayY = tip.y * overlayCanvas.height;
+    if (!state.currentOverlayStroke) state.currentOverlayStroke = [];
+    state.currentOverlayStroke.push({ x: overlayX, y: overlayY });
 
-  if (state.drawPoints.length > 1) {
-    const prev = state.drawPoints[state.drawPoints.length - 2];
-    drawCtx.beginPath();
-    drawCtx.moveTo(prev.x, prev.y);
-    drawCtx.lineTo(drawX, drawY);
-    drawCtx.stroke();
+    state.wasPinching = true;
+
+    // Show pinch dot on overlay
+    overlayCtx.beginPath();
+    overlayCtx.arc(overlayX, overlayY, 10, 0, Math.PI * 2);
+    overlayCtx.fillStyle = 'rgba(255, 80, 80, 0.85)';
+    overlayCtx.fill();
+
+    setStatus('ready', '👌 Drawing... open your palm to stop');
+    return;
   }
 
-  // ── LEFT PANEL: overlay on webcam feed ──
-  // CSS scaleX(-1) is applied to overlay-canvas, so we draw at raw tip.x
-  // → the CSS flip makes it appear at the correct mirrored position
-  const overlayX = tip.x * overlayCanvas.width;
-  const overlayY = tip.y * overlayCanvas.height;
-
-  if (!state.currentOverlayStroke) {
-    state.currentOverlayStroke = [];
+  // ── OPEN PALM → Stop drawing ──
+  if (openPalm && state.isDrawing) {
+    state.gestureHoldFrames++;
+    // Require 3 consistent frames to avoid accidental stops
+    if (state.gestureHoldFrames >= 3) {
+      stopDrawing();
+      state.wasOpenPalm = true;
+      state.gestureHoldFrames = 0;
+    }
+    return;
   }
-  state.currentOverlayStroke.push({ x: overlayX, y: overlayY });
+
+  // ── Neither gesture ──
+  if (!pinching) {
+    // If we were pinching and now lifted, end stroke segment
+    if (state.wasPinching && state.isDrawing) {
+      if (state.currentOverlayStroke && state.currentOverlayStroke.length > 1) {
+        state.overlayStrokes.push([...state.currentOverlayStroke]);
+      }
+      state.currentOverlayStroke = null;
+    }
+    state.wasPinching = false;
+    state.gestureHoldFrames = 0;
+  }
 }
 
-// ── REDRAW TRAIL ON WEBCAM OVERLAY ───────
+// Start drawing (called by pinch gesture OR Start button)
+function startDrawing() {
+  if (state.isDrawing) return;
+  state.isDrawing = true;
+  state.currentOverlayStroke = null;
+  btnStart.disabled = true;
+  btnStop.disabled  = false;
+  setStatus('ready', '👌 Pinch to draw — open palm to stop');
+}
+
+// Stop drawing (called by open-palm gesture OR Stop button)
+function stopDrawing() {
+  if (!state.isDrawing) return;
+  state.isDrawing = false;
+  if (state.currentOverlayStroke && state.currentOverlayStroke.length > 1)
+    state.overlayStrokes.push([...state.currentOverlayStroke]);
+  state.currentOverlayStroke = null;
+  btnStart.disabled = false;
+  btnStop.disabled  = true;
+
+  if (state.drawPoints.length > 10) {
+    state.authData = state.drawPoints.map(p => ({ x: p.x, y: p.y }));
+    btnDone.disabled = false;
+    setStatus('ready', '✅ Drawing captured — click Done to save, or pinch to keep drawing');
+  } else {
+    showError(err2, 'Drawing too short — pinch and draw a longer gesture.');
+    setStatus('ready', 'Too short — try again');
+  }
+}
+
+// ── REDRAW TRAIL ──────────────────────────
 function redrawOverlayTrail() {
   const drawStroke = (pts) => {
     if (!pts || pts.length < 2) return;
@@ -270,13 +459,10 @@ function redrawOverlayTrail() {
     overlayCtx.shadowBlur  = 8;
     overlayCtx.beginPath();
     overlayCtx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) {
-      overlayCtx.lineTo(pts[i].x, pts[i].y);
-    }
+    for (let i = 1; i < pts.length; i++) overlayCtx.lineTo(pts[i].x, pts[i].y);
     overlayCtx.stroke();
     overlayCtx.restore();
   };
-
   state.overlayStrokes.forEach(drawStroke);
   if (state.currentOverlayStroke) drawStroke(state.currentOverlayStroke);
 }
@@ -287,13 +473,11 @@ function handlePIN(results) {
 
   let totalFingers = 0;
   results.multiHandLandmarks.forEach((landmarks, i) => {
-    const handedness = results.multiHandedness[i].label;
-    totalFingers += countFingers(landmarks, handedness);
+    totalFingers += countFingers(landmarks, results.multiHandedness[i].label);
   });
 
   document.getElementById('finger-count').textContent = totalFingers;
-
-  if (totalFingers === state.pinCurrentCount) return; // no change
+  if (totalFingers === state.pinCurrentCount) return;
 
   state.pinCurrentCount = totalFingers;
   clearPinTimer();
@@ -302,7 +486,6 @@ function handlePIN(results) {
     document.getElementById('pin-timer-wrap').style.display = 'block';
     state.pinCountdown = 3;
     document.getElementById('pin-timer').textContent = 3;
-
     state.pinTimer = setInterval(() => {
       state.pinCountdown--;
       document.getElementById('pin-timer').textContent = state.pinCountdown;
@@ -337,13 +520,12 @@ function confirmPinDigit(value) {
   digitEl.textContent = clamped;
   digitEl.classList.add('filled');
   digitEl.classList.remove('active');
-
   state.pinCurrentDigit++;
   state.pinCurrentCount = -1;
 
   if (state.pinCurrentDigit >= 4) {
     state.authData = state.pinDigits.slice();
-    setStatus('ready', 'PIN set successfully ✓');
+    setStatus('ready', 'PIN set ✓ — click Done');
     document.getElementById('pin-current').textContent = 'PIN complete! ✓';
     btnDone.disabled = false;
   } else {
@@ -357,86 +539,18 @@ function updatePinUI() {
   if (nextDigit) nextDigit.classList.add('active');
 }
 
-// ── FACE CAPTURE (FIXED) ─────────────────
-// Collects up to 5 descriptor samples and averages them.
-// This produces a more stable reference vector that tolerates
-// lighting changes better at login time.
-const _faceCaptureSamples = [];
-const FACE_CAPTURE_TARGET = 5;   // collect 5 frames before averaging
-
-async function captureFace() {
-  if (!state.modelsLoaded) return;
-  try {
-    // FIX: lower scoreThreshold to match login detector settings
-    const options = new faceapi.TinyFaceDetectorOptions({
-      inputSize: 320,
-      scoreThreshold: 0.35,
-    });
-
-    const detection = await faceapi
-      .detectSingleFace(webcamEl, options)
-      .withFaceLandmarks()
-      .withFaceDescriptor();
-
-    if (detection) {
-      _faceCaptureSamples.push(detection.descriptor);
-
-      if (_faceCaptureSamples.length < FACE_CAPTURE_TARGET) {
-        setStatus('loading',
-          `Capturing face sample ${_faceCaptureSamples.length}/${FACE_CAPTURE_TARGET} — hold still...`);
-        setTimeout(captureFace, 600);
-        return;
-      }
-
-      // Average all samples for a more robust descriptor
-      const len = _faceCaptureSamples[0].length;
-      const avg = new Float32Array(len);
-      for (const sample of _faceCaptureSamples) {
-        for (let i = 0; i < len; i++) avg[i] += sample[i];
-      }
-      for (let i = 0; i < len; i++) avg[i] /= _faceCaptureSamples.length;
-
-      state.faceDescriptor = Array.from(avg);
-      setStatus('ready', `Face enrolled (${FACE_CAPTURE_TARGET} samples) + Hand tracking ✓`);
-    } else {
-      setStatus('loading', 'Looking for your face — sit in front of the camera, ensure good lighting');
-      setTimeout(captureFace, 2000);
-    }
-  } catch (e) {
-    setTimeout(captureFace, 3000);
-  }
-}
-
-// ── DRAW CONTROLS ─────────────────────────
+// ── DRAW CONTROLS (buttons remain as fallback) ──
 btnStart.addEventListener('click', () => {
-  state.isDrawing = true;
+  startDrawing();
   state.drawPoints = [];
   state.overlayStrokes = [];
   state.currentOverlayStroke = null;
   initDrawCanvas();
-  btnStart.disabled = true;
-  btnStop.disabled  = false;
-  setStatus('ready', 'Drawing started — move your index finger in the air');
+  setStatus('ready', '👌 Pinch to draw — or just move your finger (button mode)');
 });
 
 btnStop.addEventListener('click', () => {
-  state.isDrawing = false;
-  // Finalise any in-progress overlay stroke
-  if (state.currentOverlayStroke && state.currentOverlayStroke.length > 1) {
-    state.overlayStrokes.push([...state.currentOverlayStroke]);
-  }
-  state.currentOverlayStroke = null;
-
-  btnStart.disabled = false;
-  btnStop.disabled  = true;
-
-  if (state.drawPoints.length > 10) {
-    state.authData = state.drawPoints.map(p => ({ x: p.x, y: p.y }));
-    btnDone.disabled = false;
-    setStatus('ready', 'Drawing captured ✓  Click "Done" to save.');
-  } else {
-    showError(err2, 'Drawing too short — try again.');
-  }
+  stopDrawing();
 });
 
 btnClear.addEventListener('click', () => {
@@ -446,15 +560,15 @@ btnClear.addEventListener('click', () => {
   state.authData = null;
   btnDone.disabled = true;
   initDrawCanvas();
-  setStatus('ready', 'Canvas cleared — draw again');
+  setStatus('ready', 'Canvas cleared — pinch to draw again');
 });
 
 // ── DONE ─────────────────────────────────
 btnDone.addEventListener('click', () => {
   if (!state.faceDescriptor)
-    return showError(err2, 'Face not captured yet. Make sure your face is visible in the webcam.');
+    return showError(err2, '⚠ Face not enrolled yet. Keep your face visible in the webcam.');
   if (!state.authData)
-    return showError(err2, 'Auth data missing. Please complete the drawing or PIN.');
+    return showError(err2, '⚠ Please complete your drawing or PIN first.');
 
   const users = JSON.parse(localStorage.getItem('airbrush_users') || '[]');
   users.push({
@@ -472,27 +586,16 @@ btnDone.addEventListener('click', () => {
 
 // ── BACK ──────────────────────────────────
 btnBack.addEventListener('click', () => {
-  if (webcamEl.srcObject)
-    webcamEl.srcObject.getTracks().forEach(t => t.stop());
+  stopCameraAndReset();
   step2El.style.display = 'none';
   step1El.style.display = 'flex';
-  resetStep2();
 });
 
-function resetStep2() {
-  state.authData = null;
-  state.faceDescriptor = null;
-  state.isDrawing = false;
-  state.drawPoints = [];
-  state.overlayStrokes = [];
-  state.currentOverlayStroke = null;
-  state.pinDigits = [];
-  state.pinCurrentDigit = 0;
-  state.pinCurrentCount = -1;
-  clearPinTimer();
-  btnDone.disabled  = true;
-  btnStart.disabled = false;
-  btnStop.disabled  = true;
+function stopCameraAndReset() {
+  state.faceLoopRunning = false;
+  if (webcamEl.srcObject)
+    webcamEl.srcObject.getTracks().forEach(t => t.stop());
+  webcamEl.srcObject = null;
 }
 
 // ── HELPERS ──────────────────────────────
