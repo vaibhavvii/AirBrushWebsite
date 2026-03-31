@@ -122,3 +122,11 @@
   font-size: 3.5rem;
   margin-bottom: 1rem;
 }
+
+/* ── Face badge at top of card (login fix) ── */
+.face-badge-top {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  width: 100%;
+  box-sizing: border-box;
+}
