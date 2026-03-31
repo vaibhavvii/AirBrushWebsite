@@ -126,17 +126,33 @@ async function startCamera() {
   state.trackingEnabled = false;   // ★ always start with tracking OFF
 
   try {
-    const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
+    setStatus('loading', 'Loading face models (first load may take 10–20s)…');
+    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
     await Promise.all([
       faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
-      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
     ]);
     state.modelsLoaded = true;
-    setStatus('loading', 'Starting webcam…');
+    state.useSSD = true;
+    setStatus('loading', 'Face models loaded ✓ Starting webcam…');
   } catch (e) {
-    setStatus('error', 'Could not load face models. Check your connection.');
-    return;
+    console.warn('[signup] SSD model failed, falling back to tinyFaceDetector:', e);
+    try {
+      const FALLBACK_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(FALLBACK_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(FALLBACK_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(FALLBACK_URL),
+      ]);
+      state.modelsLoaded = true;
+      state.useSSD = false;
+      setStatus('loading', 'Face models loaded (fallback) ✓ Starting webcam…');
+    } catch (e2) {
+      setStatus('error', 'Could not load face models. Check your internet connection and reload.');
+      console.error('[signup] Both model sources failed:', e2);
+      return;
+    }
   }
 
   const hands = new Hands({
@@ -465,8 +481,9 @@ async function captureFaceLoop() {
   const faceIcon  = document.getElementById('face-icon');
   const faceStat  = document.getElementById('face-status');
   try {
-    // Use accurate SSD model — much better than tinyFaceDetector
-    const opts = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
+    const opts = state.useSSD
+      ? new faceapi.SsdMobilenetv1Options({ minConfidence: 0.4 })
+      : new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 });
     const det  = await faceapi.detectSingleFace(webcamEl, opts)
       .withFaceLandmarks().withFaceDescriptor();
     if (det) {
