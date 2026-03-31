@@ -128,7 +128,7 @@ async function startCamera() {
   try {
     const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
     await Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
       faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
     ]);
@@ -452,6 +452,9 @@ function updatePinUI() {
 }
 
 // ── FACE CAPTURE ─────────────────────────
+// Accumulate up to 5 face samples and average them for robust enrollment
+const _facesamples = [];
+
 async function captureFaceLoop() {
   if (!state.faceLoopRunning) return;
   if (!state.modelsLoaded || !webcamEl.videoWidth) {
@@ -462,16 +465,27 @@ async function captureFaceLoop() {
   const faceIcon  = document.getElementById('face-icon');
   const faceStat  = document.getElementById('face-status');
   try {
-    const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 });
+    // Use accurate SSD model — much better than tinyFaceDetector
+    const opts = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
     const det  = await faceapi.detectSingleFace(webcamEl, opts)
       .withFaceLandmarks().withFaceDescriptor();
     if (det) {
       if (!state.faceDescriptor) {
-        state.faceDescriptor = Array.from(det.descriptor);
-        faceBadge.className  = 'face-badge pass';
-        faceIcon.textContent = '✅';
-        faceStat.textContent = 'Face captured ✓';
-        setStatus('ready', `Face enrolled! Now ${state.method === 'pin' ? 'enter your PIN' : 'draw your ' + state.method}.`);
+        _facesamples.push(Array.from(det.descriptor));
+        const need = 5;
+        faceBadge.className  = 'face-badge checking';
+        faceIcon.textContent = '📸';
+        faceStat.textContent = `Sampling… ${_facesamples.length}/${need}`;
+        if (_facesamples.length >= need) {
+          // Average all samples for a robust descriptor
+          const avg = new Array(128).fill(0);
+          _facesamples.forEach(d => d.forEach((v, i) => avg[i] += v / need));
+          state.faceDescriptor = avg;
+          faceBadge.className  = 'face-badge pass';
+          faceIcon.textContent = '✅';
+          faceStat.textContent = 'Face enrolled ✓ (5 samples)';
+          setStatus('ready', `Face enrolled! Now ${state.method === 'pin' ? 'enter your PIN' : 'draw your ' + state.method}.`);
+        }
       } else {
         faceBadge.className  = 'face-badge pass';
         faceIcon.textContent = '✅';
@@ -487,7 +501,7 @@ async function captureFaceLoop() {
   } catch (e) {
     console.warn('[signup] face error:', e.message);
   }
-  setTimeout(captureFaceLoop, 1500);
+  setTimeout(captureFaceLoop, 900);
 }
 
 // ── SAVE USER ─────────────────────────────
