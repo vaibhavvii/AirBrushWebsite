@@ -126,33 +126,18 @@ async function startCamera() {
   state.trackingEnabled = false;   // ★ always start with tracking OFF
 
   try {
-    setStatus('loading', 'Loading face models (first load may take 10–20s)…');
-    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+    setStatus('loading', 'Loading face models…');
+    const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
     await Promise.all([
-      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
       faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
     ]);
     state.modelsLoaded = true;
-    state.useSSD = true;
-    setStatus('loading', 'Face models loaded ✓ Starting webcam…');
+    setStatus('loading', 'Starting webcam…');
   } catch (e) {
-    console.warn('[signup] SSD model failed, falling back to tinyFaceDetector:', e);
-    try {
-      const FALLBACK_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(FALLBACK_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(FALLBACK_URL),
-        faceapi.nets.faceRecognitionNet.loadFromUri(FALLBACK_URL),
-      ]);
-      state.modelsLoaded = true;
-      state.useSSD = false;
-      setStatus('loading', 'Face models loaded (fallback) ✓ Starting webcam…');
-    } catch (e2) {
-      setStatus('error', 'Could not load face models. Check your internet connection and reload.');
-      console.error('[signup] Both model sources failed:', e2);
-      return;
-    }
+    setStatus('error', 'Could not load face models. Reload the page.');
+    return;
   }
 
   const hands = new Hands({
@@ -468,57 +453,36 @@ function updatePinUI() {
 }
 
 // ── FACE CAPTURE ─────────────────────────
-// Accumulate up to 5 face samples and average them for robust enrollment
-const _facesamples = [];
-
 async function captureFaceLoop() {
   if (!state.faceLoopRunning) return;
   if (!state.modelsLoaded || !webcamEl.videoWidth) {
-    setTimeout(captureFaceLoop, 800);
+    setTimeout(captureFaceLoop, 500);
     return;
   }
   const faceBadge = document.getElementById('face-badge');
   const faceIcon  = document.getElementById('face-icon');
   const faceStat  = document.getElementById('face-status');
   try {
-    const opts = state.useSSD
-      ? new faceapi.SsdMobilenetv1Options({ minConfidence: 0.4 })
-      : new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 });
+    const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.1 });
     const det  = await faceapi.detectSingleFace(webcamEl, opts)
       .withFaceLandmarks().withFaceDescriptor();
     if (det) {
-      if (!state.faceDescriptor) {
-        _facesamples.push(Array.from(det.descriptor));
-        const need = 5;
-        faceBadge.className  = 'face-badge checking';
-        faceIcon.textContent = '📸';
-        faceStat.textContent = `Sampling… ${_facesamples.length}/${need}`;
-        if (_facesamples.length >= need) {
-          // Average all samples for a robust descriptor
-          const avg = new Array(128).fill(0);
-          _facesamples.forEach(d => d.forEach((v, i) => avg[i] += v / need));
-          state.faceDescriptor = avg;
-          faceBadge.className  = 'face-badge pass';
-          faceIcon.textContent = '✅';
-          faceStat.textContent = 'Face enrolled ✓ (5 samples)';
-          setStatus('ready', `Face enrolled! Now ${state.method === 'pin' ? 'enter your PIN' : 'draw your ' + state.method}.`);
-        }
-      } else {
-        faceBadge.className  = 'face-badge pass';
-        faceIcon.textContent = '✅';
-        faceStat.textContent = 'Face locked in ✓';
-      }
+      state.faceDescriptor = Array.from(det.descriptor);
+      faceBadge.className  = 'face-badge pass';
+      faceIcon.textContent = '✅';
+      faceStat.textContent = 'Face captured ✓';
+      setStatus('ready', `Face enrolled! Now ${state.method === 'pin' ? 'enter your PIN' : 'draw your ' + state.method}.`);
     } else {
       if (!state.faceDescriptor) {
         faceBadge.className  = 'face-badge checking';
         faceIcon.textContent = '👤';
-        faceStat.textContent = 'Look at the camera…';
+        faceStat.textContent = 'Look at camera…';
       }
     }
   } catch (e) {
-    console.warn('[signup] face error:', e.message);
+    console.warn('[signup] face:', e.message);
   }
-  setTimeout(captureFaceLoop, 900);
+  setTimeout(captureFaceLoop, 600);
 }
 
 // ── SAVE USER ─────────────────────────────
