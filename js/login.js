@@ -16,7 +16,7 @@ const state = {
   pinDigits: [], pinCurrentDigit: 0, pinCurrentCount: -1,
   pinTimer: null, pinCountdown: 3,
   modelsLoaded: false, faceResult: null, faceDistance: Infinity,
-  FACE_THRESHOLD: 0.65, PATH_THRESHOLD: 0.45,
+  FACE_THRESHOLD: 0.50, PATH_THRESHOLD: 0.45,
   faceLoopRunning: false,
   wasPinching: false, gestureHoldFrames: 0,
   latestLandmarks: null, latestHandResults: null,
@@ -123,7 +123,7 @@ async function startCamera() {
   try {
     const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
     await Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
       faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
     ]);
@@ -438,7 +438,8 @@ async function runFaceVerification() {
     return;
   }
   try {
-    const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 });
+    // Use accurate SSD model
+    const opts = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
     const det  = await faceapi.detectSingleFace(webcamEl, opts)
       .withFaceLandmarks().withFaceDescriptor();
     if (det) {
@@ -481,7 +482,7 @@ async function runFaceVerification() {
     console.warn('[login] face err:', e.message);
     setFaceBadge('checking', '⏳', 'Retrying face scan…');
   }
-  setTimeout(runFaceVerification, 1800);
+  setTimeout(runFaceVerification, 900);
 }
 
 function euclideanDist(a, b) {
