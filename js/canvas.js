@@ -1,0 +1,834 @@
+// ═══════════════════════════════════════════
+//  AIRBRUSH — canvas.js
+//  Main Air Canvas page logic
+//
+//  Features:
+//   • Air mode: MediaPipe hand tracking
+//     - Pinch (thumb+index) = draw
+//     - Index + middle up (peace ✌) = eraser
+//     - Fist + wrist shake = undo
+//     - Open palm = stop stroke
+//   • Mouse mode: standard mouse drawing
+//   • Colour, size, opacity controls
+//   • Undo stack (up to 50 states)
+//   • Voice description (Web Speech API)
+//   • AI image generation (Hugging Face free)
+// ═══════════════════════════════════════════
+
+// ── SESSION GUARD ─────────────────────────
+const session = JSON.parse(sessionStorage.getItem('airbrush_session') || 'null');
+// For dev: comment out the redirect to test without logging in
+if (!session) window.location.href = 'login.html';
+
+// ── CANVAS SETUP ──────────────────────────
+const webcamEl      = document.getElementById('webcam');
+const overlayCanvas = document.getElementById('overlay-canvas');
+const drawCanvas    = document.getElementById('draw-canvas');
+const overlayCtx    = overlayCanvas.getContext('2d');
+const drawCtx       = drawCanvas.getContext('2d', { willReadFrequently: true });
+
+// ── STATE ─────────────────────────────────
+const S = {
+  mode:           'air',      // 'air' | 'mouse'
+  tool:           'brush',    // 'brush' | 'eraser'
+  color:          '#6C63FF',
+  brushSize:      4,
+  opacity:        1.0,
+  isActive:       false,      // camera is running + tracking
+  isDrawing:      false,      // currently in a stroke
+  latestLandmarks: null,
+  latestResults:  null,
+
+  // Gesture state
+  wasPinching:    false,
+  wasErasing:     false,
+  openPalmFrames: 0,
+  fistHistory:    [],         // wrist x-positions for shake detection
+  lastFistX:      null,
+  shakeCount:     0,
+  shakeTimer:     null,
+
+  // Mouse state
+  mouseDown:      false,
+  lastMouseX:     0,
+  lastMouseY:     0,
+
+  // Undo stack
+  undoStack:      [],
+  MAX_UNDO:       50,
+
+  // AI
+  lastGenerated:  null,       // blob URL of last AI image
+};
+
+// ── DOM ───────────────────────────────────
+const navUser       = document.getElementById('nav-user');
+const statusDot     = document.getElementById('status-dot');
+const statusText    = document.getElementById('status-text');
+const btnAirMode    = document.getElementById('btn-air-mode');
+const btnMouseMode  = document.getElementById('btn-mouse-mode');
+const btnBrush      = document.getElementById('btn-brush');
+const btnEraser     = document.getElementById('btn-eraser');
+const btnStart      = document.getElementById('btn-start');
+const btnStop       = document.getElementById('btn-stop');
+const btnUndo       = document.getElementById('btn-undo');
+const btnClear      = document.getElementById('btn-clear');
+const btnDownload   = document.getElementById('btn-download');
+const btnGenerate   = document.getElementById('btn-generate');
+const btnVoice      = document.getElementById('btn-voice');
+const btnSaveToken  = document.getElementById('btn-save-token');
+const btnSaveAI     = document.getElementById('btn-save-ai');
+const btnRetryAI    = document.getElementById('btn-retry-ai');
+const brushSizeEl   = document.getElementById('brush-size');
+const brushOpEl     = document.getElementById('brush-opacity');
+const sizeLabelEl   = document.getElementById('size-label');
+const opLabelEl     = document.getElementById('opacity-label');
+const colorCustomEl = document.getElementById('color-custom');
+const aiDescEl      = document.getElementById('ai-description');
+const hfTokenEl     = document.getElementById('hf-token');
+const modelSelectEl = document.getElementById('ai-model-select');
+const aiPlaceholder = document.getElementById('ai-placeholder');
+const aiLoading     = document.getElementById('ai-loading');
+const aiLoadingText = document.getElementById('ai-loading-text');
+const aiResultImg   = document.getElementById('ai-result-img');
+const aiActions     = document.getElementById('ai-actions');
+const gestureInd    = document.getElementById('gesture-indicator');
+
+// ── INIT ──────────────────────────────────
+function init() {
+  // User name
+  if (session) navUser.textContent = `👤 ${session.name}`;
+  else navUser.textContent = '👤 Guest';
+
+  // Load saved HF token
+  const savedToken = localStorage.getItem('airbrush_hf_token');
+  if (savedToken) hfTokenEl.value = savedToken;
+
+  // Init canvas
+  resizeDrawCanvas();
+  window.addEventListener('resize', resizeDrawCanvas);
+
+  // Bind controls
+  bindControls();
+
+  setStatus('ready', '✋ Click Start to begin Air Canvas');
+}
+
+function resizeDrawCanvas() {
+  const box = document.querySelector('.draw-frame-box');
+  if (!box) return;
+  const rect = box.getBoundingClientRect();
+  // Save existing drawing before resize
+  const imgData = drawCtx.getImageData(0, 0, drawCanvas.width, drawCanvas.height);
+  drawCanvas.width  = rect.width  || 600;
+  drawCanvas.height = rect.height || 450;
+  // Restore
+  if (imgData.width > 0) drawCtx.putImageData(imgData, 0, 0);
+  else fillWhite();
+}
+
+function fillWhite() {
+  drawCtx.fillStyle = '#ffffff';
+  drawCtx.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+}
+
+// ── CONTROLS ──────────────────────────────
+function bindControls() {
+  // Mode toggle
+  btnAirMode.addEventListener('click',   () => setMode('air'));
+  btnMouseMode.addEventListener('click', () => setMode('mouse'));
+
+  // Tool
+  btnBrush.addEventListener('click',  () => setTool('brush'));
+  btnEraser.addEventListener('click', () => setTool('eraser'));
+
+  // Brush size
+  brushSizeEl.addEventListener('input', () => {
+    S.brushSize = parseInt(brushSizeEl.value);
+    sizeLabelEl.textContent = S.brushSize;
+  });
+
+  // Opacity
+  brushOpEl.addEventListener('input', () => {
+    S.opacity = parseInt(brushOpEl.value) / 100;
+    opLabelEl.textContent = brushOpEl.value;
+  });
+
+  // Colour swatches
+  document.querySelectorAll('.swatch').forEach(sw => {
+    sw.addEventListener('click', () => {
+      document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+      sw.classList.add('active');
+      S.color = sw.dataset.color;
+      colorCustomEl.value = sw.dataset.color;
+      if (S.tool === 'eraser') setTool('brush');
+    });
+  });
+  colorCustomEl.addEventListener('input', () => {
+    S.color = colorCustomEl.value;
+    document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+    if (S.tool === 'eraser') setTool('brush');
+  });
+
+  // Start / Stop
+  btnStart.addEventListener('click', startAir);
+  btnStop.addEventListener('click',  stopAir);
+
+  // Undo / Clear
+  btnUndo.addEventListener('click',     undo);
+  btnClear.addEventListener('click',    clearCanvas);
+  btnDownload.addEventListener('click', downloadCanvas);
+
+  // AI
+  btnGenerate.addEventListener('click', generateAI);
+  btnVoice.addEventListener('click',    startVoice);
+  btnSaveToken.addEventListener('click', () => {
+    localStorage.setItem('airbrush_hf_token', hfTokenEl.value.trim());
+    showToast('Token saved!');
+  });
+  btnSaveAI.addEventListener('click',   saveAIImage);
+  btnRetryAI.addEventListener('click',  generateAI);
+
+  // Logout
+  document.getElementById('btn-logout').addEventListener('click', () => {
+    sessionStorage.removeItem('airbrush_session');
+    window.location.href = 'login.html';
+  });
+
+  // Mouse drawing
+  drawCanvas.addEventListener('mousedown',  onMouseDown);
+  drawCanvas.addEventListener('mousemove',  onMouseMove);
+  drawCanvas.addEventListener('mouseup',    onMouseUp);
+  drawCanvas.addEventListener('mouseleave', onMouseUp);
+
+  // Touch drawing (mobile)
+  drawCanvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    const rect = drawCanvas.getBoundingClientRect();
+    onMouseDown({ offsetX: t.clientX - rect.left, offsetY: t.clientY - rect.top });
+  }, { passive: false });
+  drawCanvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const t = e.touches[0];
+    const rect = drawCanvas.getBoundingClientRect();
+    onMouseMove({ offsetX: t.clientX - rect.left, offsetY: t.clientY - rect.top });
+  }, { passive: false });
+  drawCanvas.addEventListener('touchend', onMouseUp, { passive: false });
+}
+
+// ── MODE SWITCHING ────────────────────────
+function setMode(mode) {
+  S.mode = mode;
+  btnAirMode.classList.toggle('active',   mode === 'air');
+  btnMouseMode.classList.toggle('active', mode === 'mouse');
+
+  const camPanel     = document.getElementById('cam-panel');
+  const gestureGuide = document.getElementById('gesture-guide');
+
+  if (mode === 'air') {
+    camPanel.style.display     = '';
+    gestureGuide.style.display = '';
+    drawCanvas.style.cursor    = 'crosshair';
+  } else {
+    // Mouse mode — stop air, hide cam
+    if (S.isActive) stopAir();
+    camPanel.style.display     = 'none';
+    gestureGuide.style.display = 'none';
+    drawCanvas.style.cursor    = S.tool === 'eraser' ? 'cell' : 'crosshair';
+    setStatus('ready', '🖱 Mouse mode — draw directly on the canvas');
+  }
+}
+
+// ── TOOL ──────────────────────────────────
+function setTool(tool) {
+  S.tool = tool;
+  btnBrush.classList.toggle('active',  tool === 'brush');
+  btnEraser.classList.toggle('active', tool === 'eraser');
+  document.querySelector('.right-panel').classList.toggle('eraser-mode', tool === 'eraser');
+}
+
+// ── AIR CANVAS — CAMERA ───────────────────
+async function startAir() {
+  if (S.isActive) return;
+  btnStart.disabled = true;
+  setStatus('loading', 'Loading MediaPipe Hands…');
+
+  const hands = new Hands({
+    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+  });
+  hands.setOptions({
+    maxNumHands:            1,
+    modelComplexity:        1,
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence:  0.6,
+  });
+  hands.onResults(onHandResults);
+
+  S.handsInstance = hands;
+
+  const camera = new Camera(webcamEl, {
+    onFrame: async () => {
+      // KEY: only resize when dims change
+      const vw = webcamEl.videoWidth  || 640;
+      const vh = webcamEl.videoHeight || 480;
+      if (overlayCanvas.width !== vw || overlayCanvas.height !== vh) {
+        overlayCanvas.width  = vw;
+        overlayCanvas.height = vh;
+      }
+      await hands.send({ image: webcamEl });
+    },
+    width: 640, height: 480,
+  });
+
+  try {
+    await camera.start();
+    S.camera     = camera;
+    S.isActive   = true;
+    btnStop.disabled  = false;
+    btnStart.disabled = true;
+    setStatus('active', '✋ Air Canvas active — pinch to draw');
+  } catch (e) {
+    btnStart.disabled = false;
+    setStatus('error', 'Camera denied — allow webcam and try again');
+  }
+}
+
+function stopAir() {
+  S.isActive = false;
+  if (webcamEl.srcObject)
+    webcamEl.srcObject.getTracks().forEach(t => t.stop());
+  webcamEl.srcObject = null;
+  overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  btnStart.disabled = false;
+  btnStop.disabled  = true;
+  S.isDrawing   = false;
+  S.wasPinching = false;
+  setStatus('ready', 'Camera stopped. Click Start to resume.');
+}
+
+// ── HAND RESULTS → state → rAF ────────────
+function onHandResults(results) {
+  S.latestLandmarks = (results.multiHandLandmarks && results.multiHandLandmarks.length > 0)
+    ? results.multiHandLandmarks[0] : null;
+  S.latestResults   = results;
+  requestAnimationFrame(renderFrame);
+}
+
+// ── RENDER FRAME (called via rAF) ─────────
+function renderFrame() {
+  overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+  if (!S.latestLandmarks) {
+    if (S.isDrawing) endStroke();
+    S.wasPinching    = false;
+    S.wasErasing     = false;
+    S.openPalmFrames = 0;
+    hideGestureIndicator();
+    return;
+  }
+
+  const lm = S.latestLandmarks;
+
+  // Draw skeleton
+  drawConnectors(overlayCtx, lm, HAND_CONNECTIONS,
+    { color: 'rgba(124,58,237,0.7)', lineWidth: 2 });
+  drawLandmarks(overlayCtx, lm,
+    { color: '#06B6D4', lineWidth: 1, radius: 3 });
+
+  // Detect gestures and act
+  processGestures(lm);
+}
+
+// ══════════════════════════════════════════
+//  GESTURE LOGIC
+// ══════════════════════════════════════════
+
+// Normalised distance helper
+function normDist(a, b, lm) {
+  const dx = lm[a].x - lm[b].x;
+  const dy = lm[a].y - lm[b].y;
+  const hx = lm[0].x - lm[9].x;
+  const hy = lm[0].y - lm[9].y;
+  return Math.hypot(dx, dy) / (Math.hypot(hx, hy) || 0.1);
+}
+
+function isPinching(lm)  { return normDist(4, 8, lm) < 0.35; }
+function isOpenPalm(lm)  {
+  return [[8,6],[12,10],[16,14],[20,18]].every(([t,p]) => lm[t].y < lm[p].y)
+    && Math.abs(lm[4].x - lm[3].x) > 0.04;
+}
+
+// ✌ Peace sign = eraser (index + middle extended, ring + pinky down)
+function isPeaceSign(lm) {
+  const indexUp  = lm[8].y  < lm[6].y;
+  const middleUp = lm[12].y < lm[10].y;
+  const ringDown = lm[16].y > lm[14].y;
+  const pinkyDown= lm[20].y > lm[18].y;
+  const noThumb  = normDist(4, 8, lm) > 0.3;
+  return indexUp && middleUp && ringDown && pinkyDown && noThumb;
+}
+
+// Fist = all fingers curled
+function isFist(lm) {
+  return [[8,6],[12,10],[16,14],[20,18]].every(([t,p]) => lm[t].y > lm[p].y)
+    && normDist(4, 8, lm) > 0.3;
+}
+
+function processGestures(lm) {
+  const pinching  = isPinching(lm);
+  const peace     = isPeaceSign(lm);
+  const openPalm  = isOpenPalm(lm);
+  const fist      = isFist(lm);
+
+  // ── PRIORITY ORDER ────────────────────
+  // 1. Open palm → stop stroke
+  if (openPalm) {
+    S.openPalmFrames++;
+    if (S.openPalmFrames >= 3 && S.isDrawing) {
+      endStroke();
+      showGestureIndicator('🖐 Stop');
+    }
+    S.wasPinching = false;
+    S.wasErasing  = false;
+    return;
+  }
+  S.openPalmFrames = 0;
+
+  // 2. Fist → check for shake (undo)
+  if (fist) {
+    detectFistShake(lm);
+    if (S.isDrawing) endStroke();
+    S.wasPinching = false;
+    S.wasErasing  = false;
+    return;
+  }
+  // Reset shake tracking when fist released
+  if (!fist) {
+    S.fistHistory = [];
+    S.lastFistX   = null;
+    S.shakeCount  = 0;
+  }
+
+  // 3. Peace ✌ → eraser mode
+  if (peace) {
+    if (!S.wasErasing) {
+      if (S.isDrawing) endStroke();
+      setTool('eraser');
+      S.wasErasing = true;
+      showGestureIndicator('✌️ Eraser');
+    }
+    // Draw with eraser
+    doAirDraw(lm, true);
+    return;
+  }
+  if (S.wasErasing && !peace) {
+    // Switch back to brush on leaving peace
+    setTool('brush');
+    S.wasErasing = false;
+    if (S.isDrawing) endStroke();
+  }
+
+  // 4. Pinch → draw
+  if (pinching) {
+    if (!S.isDrawing) {
+      pushUndoState();
+      S.isDrawing   = true;
+      S.wasPinching = true;
+    }
+    doAirDraw(lm, false);
+    showGestureIndicator('👌 Drawing');
+    return;
+  }
+
+  // 5. No gesture — end stroke if was drawing
+  if (S.wasPinching && S.isDrawing) endStroke();
+  S.wasPinching = false;
+  hideGestureIndicator();
+}
+
+// ── FIST SHAKE DETECTION ──────────────────
+function detectFistShake(lm) {
+  const wristX = lm[0].x;
+
+  if (S.lastFistX === null) {
+    S.lastFistX = wristX;
+    return;
+  }
+
+  const delta = Math.abs(wristX - S.lastFistX);
+  if (delta > 0.04) { // threshold for significant wrist movement
+    S.shakeCount++;
+    if (S.shakeCount >= 3) {
+      // 3 direction changes = shake detected
+      undo();
+      S.shakeCount  = 0;
+      S.fistHistory = [];
+      S.lastFistX   = null;
+      showGestureIndicator('✊ Undo!');
+      return;
+    }
+  }
+  S.lastFistX = wristX;
+}
+
+// ── AIR DRAWING ───────────────────────────
+function doAirDraw(lm, erasing) {
+  const tip   = lm[8]; // index finger tip
+  const drawX = (1 - tip.x) * drawCanvas.width;  // mirror X
+  const drawY = tip.y * drawCanvas.height;
+
+  // Draw on the main canvas
+  applyBrush(drawX, drawY, erasing ? 'eraser' : S.tool);
+
+  // Draw cursor dot on overlay
+  const ox = tip.x * overlayCanvas.width;
+  const oy = tip.y * overlayCanvas.height;
+  overlayCtx.save();
+  overlayCtx.beginPath();
+  overlayCtx.arc(ox, oy, erasing ? 14 : 10, 0, Math.PI * 2);
+  overlayCtx.fillStyle = erasing ? 'rgba(255,200,50,0.7)' : 'rgba(255,80,80,0.8)';
+  overlayCtx.fill();
+  overlayCtx.restore();
+}
+
+// ── APPLY BRUSH / ERASER ──────────────────
+let _lastDrawX = null, _lastDrawY = null;
+
+function applyBrush(x, y, tool) {
+  drawCtx.save();
+  drawCtx.globalAlpha   = tool === 'eraser' ? 1 : S.opacity;
+  drawCtx.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
+  drawCtx.strokeStyle   = tool === 'eraser' ? 'rgba(0,0,0,1)' : S.color;
+  drawCtx.lineWidth     = tool === 'eraser' ? S.brushSize * 3 : S.brushSize;
+  drawCtx.lineCap       = 'round';
+  drawCtx.lineJoin      = 'round';
+
+  if (_lastDrawX !== null) {
+    drawCtx.beginPath();
+    drawCtx.moveTo(_lastDrawX, _lastDrawY);
+    drawCtx.lineTo(x, y);
+    drawCtx.stroke();
+  } else {
+    // Single dot for start of stroke
+    drawCtx.beginPath();
+    const r = (tool === 'eraser' ? S.brushSize * 3 : S.brushSize) / 2;
+    drawCtx.arc(x, y, r, 0, Math.PI * 2);
+    drawCtx.fillStyle = drawCtx.strokeStyle;
+    drawCtx.fill();
+  }
+  drawCtx.restore();
+  _lastDrawX = x;
+  _lastDrawY = y;
+}
+
+function endStroke() {
+  S.isDrawing = false;
+  S.wasPinching = false;
+  _lastDrawX = null;
+  _lastDrawY = null;
+}
+
+// ── GESTURE INDICATOR ─────────────────────
+let _gIndicatorTimer = null;
+function showGestureIndicator(text) {
+  gestureInd.textContent = text;
+  gestureInd.style.display = 'block';
+  clearTimeout(_gIndicatorTimer);
+  _gIndicatorTimer = setTimeout(hideGestureIndicator, 1500);
+}
+function hideGestureIndicator() {
+  gestureInd.style.display = 'none';
+}
+
+// ══════════════════════════════════════════
+//  MOUSE DRAWING
+// ══════════════════════════════════════════
+function onMouseDown(e) {
+  if (S.mode !== 'mouse') return;
+  pushUndoState();
+  S.mouseDown = true;
+  S.lastMouseX = e.offsetX;
+  S.lastMouseY = e.offsetY;
+  _lastDrawX   = null;
+  _lastDrawY   = null;
+  applyBrush(e.offsetX, e.offsetY, S.tool);
+}
+
+function onMouseMove(e) {
+  if (!S.mouseDown || S.mode !== 'mouse') return;
+  applyBrush(e.offsetX, e.offsetY, S.tool);
+  S.lastMouseX = e.offsetX;
+  S.lastMouseY = e.offsetY;
+}
+
+function onMouseUp() {
+  if (S.mode !== 'mouse') return;
+  S.mouseDown = false;
+  _lastDrawX  = null;
+  _lastDrawY  = null;
+}
+
+// ══════════════════════════════════════════
+//  UNDO STACK
+// ══════════════════════════════════════════
+function pushUndoState() {
+  const snapshot = drawCtx.getImageData(0, 0, drawCanvas.width, drawCanvas.height);
+  S.undoStack.push(snapshot);
+  if (S.undoStack.length > S.MAX_UNDO) S.undoStack.shift();
+}
+
+function undo() {
+  if (!S.undoStack.length) {
+    showToast('Nothing to undo');
+    return;
+  }
+  const snapshot = S.undoStack.pop();
+  drawCtx.putImageData(snapshot, 0, 0);
+  showToast('↩ Undo');
+}
+
+function clearCanvas() {
+  pushUndoState();
+  fillWhite();
+  showToast('Canvas cleared');
+}
+
+function downloadCanvas() {
+  const link  = document.createElement('a');
+  link.download = 'airbrush-drawing.png';
+  link.href     = drawCanvas.toDataURL('image/png');
+  link.click();
+}
+
+// ══════════════════════════════════════════
+//  VOICE INPUT
+// ══════════════════════════════════════════
+let recognition = null;
+
+function startVoice() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    showToast('Voice input not supported in this browser. Try Chrome.');
+    return;
+  }
+
+  if (recognition) {
+    recognition.stop();
+    return;
+  }
+
+  recognition = new SpeechRecognition();
+  recognition.lang        = 'en-US';
+  recognition.continuous  = false;
+  recognition.interimResults = true;
+
+  btnVoice.classList.add('listening');
+  btnVoice.textContent = '🔴';
+
+  recognition.onresult = e => {
+    let transcript = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      transcript += e.results[i][0].transcript;
+    }
+    aiDescEl.value = transcript;
+  };
+
+  recognition.onend = () => {
+    btnVoice.classList.remove('listening');
+    btnVoice.textContent = '🎤';
+    recognition = null;
+  };
+
+  recognition.onerror = e => {
+    console.warn('[voice]', e.error);
+    btnVoice.classList.remove('listening');
+    btnVoice.textContent = '🎤';
+    recognition = null;
+    showToast('Voice error: ' + e.error);
+  };
+
+  recognition.start();
+}
+
+// ══════════════════════════════════════════
+//  AI IMAGE GENERATION
+//
+//  Strategy (no-token mode — zero CORS issues):
+//    → Pollinations.ai  (100% free, no key, CORS-safe)
+//       Simply embeds the prompt in a URL and loads as <img>
+//
+//  Strategy (token mode):
+//    → Hugging Face Inference API
+//       Requires a free HF account token (hf_...)
+//       Get one at: huggingface.co/settings/tokens
+// ══════════════════════════════════════════
+
+const LOADING_MESSAGES = [
+  'Thinking creatively…',
+  'Painting with AI…',
+  'Dreaming up your art…',
+  'Generating pixels…',
+  'Composing your vision…',
+];
+
+async function generateAI() {
+  const desc  = aiDescEl.value.trim();
+  const token = localStorage.getItem('airbrush_hf_token') || '';
+  const model = modelSelectEl.value;
+  const prompt = buildPrompt(desc);
+
+  // UI: show loading
+  aiPlaceholder.style.display = 'none';
+  aiResultImg.style.display   = 'none';
+  aiActions.style.display     = 'none';
+  aiLoading.style.display     = 'flex';
+  btnGenerate.disabled        = true;
+
+  let msgIdx = 0;
+  aiLoadingText.textContent = LOADING_MESSAGES[0];
+  const msgInterval = setInterval(() => {
+    msgIdx = (msgIdx + 1) % LOADING_MESSAGES.length;
+    aiLoadingText.textContent = LOADING_MESSAGES[msgIdx];
+  }, 2000);
+
+  try {
+    let blobUrl;
+
+    if (token) {
+      // ── HF path: user has a token ──────────────────
+      blobUrl = await generateWithHuggingFace(prompt, model, token);
+    } else {
+      // ── Pollinations path: no token, zero CORS issues ──
+      blobUrl = await generateWithPollinations(prompt);
+    }
+
+    S.lastGenerated       = blobUrl;
+    aiResultImg.src       = blobUrl;
+    aiResultImg.style.display = 'block';
+    aiLoading.style.display   = 'none';
+    aiActions.style.display   = 'flex';
+    showToast('✨ AI art generated!');
+
+  } catch (err) {
+    console.error('[AI gen]', err);
+    aiLoading.style.display     = 'none';
+    aiPlaceholder.style.display = 'flex';
+    showToast('⚠️ ' + err.message);
+  } finally {
+    clearInterval(msgInterval);
+    btnGenerate.disabled = false;
+  }
+}
+
+// ── Pollinations.ai — CORS-safe, no token required ──
+// Returns a blob URL from an image tag load
+async function generateWithPollinations(prompt) {
+  // Encode the prompt for URL use
+  const encoded = encodeURIComponent(prompt);
+  // Add a random seed so each click gives a different result
+  const seed    = Math.floor(Math.random() * 999999);
+  // Pollinations serves images directly — no CORS, no auth needed
+  const url     = `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&seed=${seed}&nologo=true`;
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+
+    const timeout = setTimeout(() => {
+      reject(new Error('Generation timed out (60s). Check your connection and try again.'));
+    }, 60000);
+
+    img.onload = () => {
+      clearTimeout(timeout);
+      // Draw to an offscreen canvas and convert to blob URL
+      const canvas = document.createElement('canvas');
+      canvas.width  = img.naturalWidth  || 512;
+      canvas.height = img.naturalHeight || 512;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob(blob => {
+        if (blob) resolve(URL.createObjectURL(blob));
+        else      resolve(url); // fallback: use url directly
+      }, 'image/png');
+    };
+
+    img.onerror = () => {
+      clearTimeout(timeout);
+      // Fallback: just set the src directly (won't be saveable but will show)
+      resolve(url);
+    };
+
+    img.src = url;
+  });
+}
+
+// ── Hugging Face — requires a free token (hf_...) ──
+async function generateWithHuggingFace(prompt, model, token) {
+  const headers = {
+    'Content-Type':  'application/json',
+    'Authorization': `Bearer ${token}`,
+  };
+  const body = JSON.stringify({
+    inputs: prompt,
+    parameters: { num_inference_steps: 25, guidance_scale: 7.5, width: 512, height: 512 },
+    options:    { wait_for_model: true, use_cache: false },
+  });
+
+  const res = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
+    method: 'POST', headers, body,
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    if (res.status === 503) throw new Error('Model loading (cold start) — wait 30s and retry.');
+    if (res.status === 429) throw new Error('Rate limited — wait 1 minute and retry.');
+    if (res.status === 401 || res.status === 403)
+      throw new Error('Invalid HF token — check it at huggingface.co/settings/tokens');
+    throw new Error(`HF API error ${res.status}: ${txt.slice(0,120)}`);
+  }
+
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
+// Build enriched prompt
+function buildPrompt(desc) {
+  const base = desc
+    ? `${desc}, digital art, highly detailed, vibrant colors`
+    : 'abstract colorful digital painting, vibrant, highly detailed';
+  return `${base}, 4k resolution, beautiful composition, artstation trending, creative art`;
+}
+
+function saveAIImage() {
+  if (!S.lastGenerated) return;
+  const link  = document.createElement('a');
+  link.href   = S.lastGenerated;
+  link.download = 'airbrush-ai-art.png';
+  link.click();
+}
+
+// ── STATUS ────────────────────────────────
+function setStatus(type, msg) {
+  statusDot.className    = 'status-dot ' + type;
+  statusText.textContent = msg;
+}
+
+// ── TOAST ─────────────────────────────────
+let _toastTimer = null;
+function showToast(msg) {
+  let toast = document.querySelector('.toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.className = 'toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => toast.classList.remove('show'), 2800);
+}
+
+// ── START ─────────────────────────────────
+init();
+fillWhite();
