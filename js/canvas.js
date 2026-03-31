@@ -1,23 +1,10 @@
 // ═══════════════════════════════════════════
 //  AIRBRUSH — canvas.js
 //  Main Air Canvas page logic
-//
-//  Features:
-//   • Air mode: MediaPipe hand tracking
-//     - Pinch (thumb+index) = draw
-//     - Index + middle up (peace ✌) = eraser
-//     - Fist + wrist shake = undo
-//     - Open palm = stop stroke
-//   • Mouse mode: standard mouse drawing
-//   • Colour, size, opacity controls
-//   • Undo stack (up to 50 states)
-//   • Voice description (Web Speech API)
-//   • AI image generation (Hugging Face free)
 // ═══════════════════════════════════════════
 
 // ── SESSION GUARD ─────────────────────────
 const session = JSON.parse(sessionStorage.getItem('airbrush_session') || 'null');
-// For dev: comment out the redirect to test without logging in
 if (!session) window.location.href = 'login.html';
 
 // ── CANVAS SETUP ──────────────────────────
@@ -29,76 +16,72 @@ const drawCtx       = drawCanvas.getContext('2d', { willReadFrequently: true });
 
 // ── STATE ─────────────────────────────────
 const S = {
-  mode:           'air',      // 'air' | 'mouse'
-  tool:           'brush',    // 'brush' | 'eraser'
+  mode:           'air',
+  tool:           'brush',
   color:          '#6C63FF',
   brushSize:      4,
   opacity:        1.0,
-  isActive:       false,      // camera is running + tracking
-  isDrawing:      false,      // currently in a stroke
+  isActive:       false,
+  isDrawing:      false,
   latestLandmarks: null,
   latestResults:  null,
 
-  // Gesture state
   wasPinching:    false,
   wasErasing:     false,
   openPalmFrames: 0,
-  fistHistory:    [],         // wrist x-positions for shake detection
+  fistHistory:    [],
   lastFistX:      null,
   shakeCount:     0,
   shakeTimer:     null,
 
-  // Mouse state
   mouseDown:      false,
   lastMouseX:     0,
   lastMouseY:     0,
 
-  // Undo stack
   undoStack:      [],
   MAX_UNDO:       50,
 
-  // AI
-  lastGenerated:  null,       // blob URL of last AI image
-  lastSketch:     null,       // data URL of sketch at generation time
-  lastDesc:       '',         // description used for generation
+  lastGenerated:  null,
+  lastSketch:     null,
+  lastDesc:       '',
 };
 
 // ── DOM ───────────────────────────────────
-const navUser       = document.getElementById('nav-user');
-const statusDot     = document.getElementById('status-dot');
-const statusText    = document.getElementById('status-text');
-const btnAirMode    = document.getElementById('btn-air-mode');
-const btnMouseMode  = document.getElementById('btn-mouse-mode');
-const btnBrush      = document.getElementById('btn-brush');
-const btnEraser     = document.getElementById('btn-eraser');
-const btnStart      = document.getElementById('btn-start');
-const btnStop       = document.getElementById('btn-stop');
-const btnUndo       = document.getElementById('btn-undo');
-const btnClear      = document.getElementById('btn-clear');
-const btnDownload   = document.getElementById('btn-download');
-const btnGenerate   = document.getElementById('btn-generate');
-const btnVoice      = document.getElementById('btn-voice');
-const btnSaveToken  = document.getElementById('btn-save-token');
-const btnSaveAI     = document.getElementById('btn-save-ai');
-const btnAddGallery = document.getElementById('btn-add-gallery');
-const btnRetryAI    = document.getElementById('btn-retry-ai');
-const brushSizeEl   = document.getElementById('brush-size');
-const brushOpEl     = document.getElementById('brush-opacity');
-const sizeLabelEl   = document.getElementById('size-label');
-const opLabelEl     = document.getElementById('opacity-label');
-const colorCustomEl = document.getElementById('color-custom');
-const aiDescEl      = document.getElementById('ai-description');
-const hfTokenEl     = document.getElementById('hf-token');
-const modelSelectEl = document.getElementById('ai-model-select');
-const aiPlaceholder = document.getElementById('ai-placeholder');
-const aiLoading     = document.getElementById('ai-loading');
-const aiLoadingText = document.getElementById('ai-loading-text');
-const aiResultImg   = document.getElementById('ai-result-img');
-const aiActions     = document.getElementById('ai-actions');
-const gestureInd    = document.getElementById('gesture-indicator');
+const navUser         = document.getElementById('nav-user');
+const statusDot       = document.getElementById('status-dot');
+const statusText      = document.getElementById('status-text');
+const btnAirMode      = document.getElementById('btn-air-mode');
+const btnMouseMode    = document.getElementById('btn-mouse-mode');
+const btnBrush        = document.getElementById('btn-brush');
+const btnEraser       = document.getElementById('btn-eraser');
+const btnStart        = document.getElementById('btn-start');
+const btnStop         = document.getElementById('btn-stop');
+const btnUndo         = document.getElementById('btn-undo');
+const btnClear        = document.getElementById('btn-clear');
+const btnDownload     = document.getElementById('btn-download');
+const btnGenerate     = document.getElementById('btn-generate');
+const btnVoice        = document.getElementById('btn-voice');
+const btnSaveToken    = document.getElementById('btn-save-token');
+const btnSaveAI       = document.getElementById('btn-save-ai');
+const btnAddGallery   = document.getElementById('btn-add-gallery');
+const btnRetryAI      = document.getElementById('btn-retry-ai');
+const brushSizeEl     = document.getElementById('brush-size');
+const brushOpEl       = document.getElementById('brush-opacity');
+const sizeLabelEl     = document.getElementById('size-label');
+const opLabelEl       = document.getElementById('opacity-label');
+const colorCustomEl   = document.getElementById('color-custom');
+const aiDescEl        = document.getElementById('ai-description');
+// ↓ FIXED: updated IDs to match the new canvas.html
+const anthropicKeyEl  = document.getElementById('anthropic-key');
+const styleSelectEl   = document.getElementById('ai-style-select');
+const aiPlaceholder   = document.getElementById('ai-placeholder');
+const aiLoading       = document.getElementById('ai-loading');
+const aiLoadingText   = document.getElementById('ai-loading-text');
+const aiResultImg     = document.getElementById('ai-result-img');
+const aiActions       = document.getElementById('ai-actions');
+const gestureInd      = document.getElementById('gesture-indicator');
 
-// ── INIT ──────────────────────────────────
-// ── WEBCAM PREVIEW — always on ────────────
+// ── WEBCAM PREVIEW ────────────────────────
 async function startWebcamPreview() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
@@ -109,25 +92,19 @@ async function startWebcamPreview() {
   }
 }
 
+// ── INIT ──────────────────────────────────
 function init() {
-  // User name
   if (session) navUser.textContent = `👤 ${session.name}`;
   else navUser.textContent = '👤 Guest';
 
-  // Load saved HF token
-  const savedToken = localStorage.getItem('airbrush_hf_token');
-  if (savedToken) hfTokenEl.value = savedToken;
+  // Load saved Anthropic key
+  const savedKey = localStorage.getItem('anthropic-key');
+  if (savedKey && anthropicKeyEl) anthropicKeyEl.value = savedKey;
 
-  // Init canvas
   resizeDrawCanvas();
   window.addEventListener('resize', resizeDrawCanvas);
-
-  // Bind controls
   bindControls();
-
-  // Start webcam preview immediately (always on)
   startWebcamPreview();
-
   setStatus('ready', '✋ Click Start to begin Air Canvas');
 }
 
@@ -135,11 +112,9 @@ function resizeDrawCanvas() {
   const box = document.querySelector('.draw-frame-box');
   if (!box) return;
   const rect = box.getBoundingClientRect();
-  // Save existing drawing before resize
   const imgData = drawCtx.getImageData(0, 0, drawCanvas.width, drawCanvas.height);
   drawCanvas.width  = rect.width  || 600;
   drawCanvas.height = rect.height || 450;
-  // Restore
   if (imgData.width > 0) drawCtx.putImageData(imgData, 0, 0);
   else fillWhite();
 }
@@ -151,27 +126,22 @@ function fillWhite() {
 
 // ── CONTROLS ──────────────────────────────
 function bindControls() {
-  // Mode toggle
   btnAirMode.addEventListener('click',   () => setMode('air'));
   btnMouseMode.addEventListener('click', () => setMode('mouse'));
 
-  // Tool
   btnBrush.addEventListener('click',  () => setTool('brush'));
   btnEraser.addEventListener('click', () => setTool('eraser'));
 
-  // Brush size
   brushSizeEl.addEventListener('input', () => {
     S.brushSize = parseInt(brushSizeEl.value);
     sizeLabelEl.textContent = S.brushSize;
   });
 
-  // Opacity
   brushOpEl.addEventListener('input', () => {
     S.opacity = parseInt(brushOpEl.value) / 100;
     opLabelEl.textContent = brushOpEl.value;
   });
 
-  // Colour swatches
   document.querySelectorAll('.swatch').forEach(sw => {
     sw.addEventListener('click', () => {
       document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
@@ -187,25 +157,31 @@ function bindControls() {
     if (S.tool === 'eraser') setTool('brush');
   });
 
-  // Start / Stop
   btnStart.addEventListener('click', startAir);
   btnStop.addEventListener('click',  stopAir);
 
-  // Undo / Clear
   btnUndo.addEventListener('click',     undo);
   btnClear.addEventListener('click',    clearCanvas);
   btnDownload.addEventListener('click', downloadCanvas);
 
-  // AI
-  btnGenerate.addEventListener('click', generateAI);
-  btnVoice.addEventListener('click',    startVoice);
-  btnSaveToken.addEventListener('click', () => {
-    localStorage.setItem('airbrush_hf_token', hfTokenEl.value.trim());
-    showToast('Token saved!');
-  });
-  btnSaveAI.addEventListener('click',   saveAIImage);
+  // AI — single wiring here, not duplicated below
+  btnGenerate.addEventListener('click',   generateAI);
+  btnRetryAI.addEventListener('click',    generateAI);
+  btnVoice.addEventListener('click',      startVoice);
+  btnSaveAI.addEventListener('click',     saveAIImage);
   btnAddGallery.addEventListener('click', addToGallery);
-  btnRetryAI.addEventListener('click',  generateAI);
+
+  // Save Anthropic API key
+  btnSaveToken.addEventListener('click', () => {
+    const key = anthropicKeyEl ? anthropicKeyEl.value.trim() : '';
+    if (key) {
+      localStorage.setItem('anthropic-key', key);
+      btnSaveToken.textContent = '✓ Saved';
+      setTimeout(() => btnSaveToken.textContent = 'Save', 2000);
+    } else {
+      showToast('Enter a key first');
+    }
+  });
 
   // Gallery modal
   document.getElementById('btn-open-gallery').addEventListener('click', e => {
@@ -228,7 +204,7 @@ function bindControls() {
   drawCanvas.addEventListener('mouseup',    onMouseUp);
   drawCanvas.addEventListener('mouseleave', onMouseUp);
 
-  // Touch drawing (mobile)
+  // Touch drawing
   drawCanvas.addEventListener('touchstart', e => {
     e.preventDefault();
     const t = e.touches[0];
@@ -258,7 +234,6 @@ function setMode(mode) {
     gestureGuide.style.display = '';
     drawCanvas.style.cursor    = 'crosshair';
   } else {
-    // Mouse mode — stop air, hide cam
     if (S.isActive) stopAir();
     camPanel.style.display     = 'none';
     gestureGuide.style.display = 'none';
@@ -291,12 +266,10 @@ async function startAir() {
     minTrackingConfidence:  0.6,
   });
   hands.onResults(onHandResults);
-
   S.handsInstance = hands;
 
   const camera = new Camera(webcamEl, {
     onFrame: async () => {
-      // Size overlay to displayed box so landmarks align with mirrored video
       const box = document.querySelector('.cam-frame-box');
       if (box) {
         const bw = box.clientWidth  || 640;
@@ -326,7 +299,6 @@ async function startAir() {
 
 function stopAir() {
   S.isActive = false;
-  // Stop MediaPipe camera tracks
   if (S.camera) {
     try { S.camera.stop(); } catch(e) {}
     S.camera = null;
@@ -337,11 +309,10 @@ function stopAir() {
   S.isDrawing   = false;
   S.wasPinching = false;
   setStatus('ready', 'Tracking stopped. Webcam preview continues.');
-  // Resume plain preview so webcam never goes black
   startWebcamPreview();
 }
 
-// ── HAND RESULTS → state → rAF ────────────
+// ── HAND RESULTS ─────────────────────────
 function onHandResults(results) {
   S.latestLandmarks = (results.multiHandLandmarks && results.multiHandLandmarks.length > 0)
     ? results.multiHandLandmarks[0] : null;
@@ -349,13 +320,9 @@ function onHandResults(results) {
   requestAnimationFrame(renderFrame);
 }
 
-// ── RENDER FRAME (called via rAF) ─────────
 function renderFrame() {
   overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
-  // ── Mirror the drawing canvas onto the overlay so strokes show on webcam ──
-  // drawCanvas is not mirrored; overlay IS mirrored via CSS scaleX(-1).
-  // So we flip horizontally when blitting so it looks correct on the webcam view.
   overlayCtx.save();
   overlayCtx.globalAlpha = 0.55;
   overlayCtx.translate(overlayCanvas.width, 0);
@@ -373,22 +340,15 @@ function renderFrame() {
   }
 
   const lm = S.latestLandmarks;
-
-  // Draw skeleton on top of the mirrored drawing
   drawConnectors(overlayCtx, lm, HAND_CONNECTIONS,
     { color: 'rgba(124,58,237,0.85)', lineWidth: 2 });
   drawLandmarks(overlayCtx, lm,
     { color: '#06B6D4', lineWidth: 1, radius: 3 });
 
-  // Detect gestures and act
   processGestures(lm);
 }
 
-// ══════════════════════════════════════════
-//  GESTURE LOGIC
-// ══════════════════════════════════════════
-
-// Normalised distance helper
+// ── GESTURES ──────────────────────────────
 function normDist(a, b, lm) {
   const dx = lm[a].x - lm[b].x;
   const dy = lm[a].y - lm[b].y;
@@ -402,31 +362,22 @@ function isOpenPalm(lm)  {
   return [[8,6],[12,10],[16,14],[20,18]].every(([t,p]) => lm[t].y < lm[p].y)
     && Math.abs(lm[4].x - lm[3].x) > 0.04;
 }
-
-// ✌ Peace sign = eraser (index + middle extended, ring + pinky down)
 function isPeaceSign(lm) {
-  const indexUp  = lm[8].y  < lm[6].y;
-  const middleUp = lm[12].y < lm[10].y;
-  const ringDown = lm[16].y > lm[14].y;
-  const pinkyDown= lm[20].y > lm[18].y;
-  const noThumb  = normDist(4, 8, lm) > 0.3;
-  return indexUp && middleUp && ringDown && pinkyDown && noThumb;
+  return lm[8].y < lm[6].y && lm[12].y < lm[10].y
+    && lm[16].y > lm[14].y && lm[20].y > lm[18].y
+    && normDist(4, 8, lm) > 0.3;
 }
-
-// Fist = all fingers curled
 function isFist(lm) {
   return [[8,6],[12,10],[16,14],[20,18]].every(([t,p]) => lm[t].y > lm[p].y)
     && normDist(4, 8, lm) > 0.3;
 }
 
 function processGestures(lm) {
-  const pinching  = isPinching(lm);
-  const peace     = isPeaceSign(lm);
-  const openPalm  = isOpenPalm(lm);
-  const fist      = isFist(lm);
+  const pinching = isPinching(lm);
+  const peace    = isPeaceSign(lm);
+  const openPalm = isOpenPalm(lm);
+  const fist     = isFist(lm);
 
-  // ── PRIORITY ORDER ────────────────────
-  // 1. Open palm → stop stroke
   if (openPalm) {
     S.openPalmFrames++;
     if (S.openPalmFrames >= 3 && S.isDrawing) {
@@ -439,7 +390,6 @@ function processGestures(lm) {
   }
   S.openPalmFrames = 0;
 
-  // 2. Fist → check for shake (undo)
   if (fist) {
     detectFistShake(lm);
     if (S.isDrawing) endStroke();
@@ -447,14 +397,12 @@ function processGestures(lm) {
     S.wasErasing  = false;
     return;
   }
-  // Reset shake tracking when fist released
   if (!fist) {
     S.fistHistory = [];
     S.lastFistX   = null;
     S.shakeCount  = 0;
   }
 
-  // 3. Peace ✌ → eraser mode
   if (peace) {
     if (!S.wasErasing) {
       if (S.isDrawing) endStroke();
@@ -462,18 +410,15 @@ function processGestures(lm) {
       S.wasErasing = true;
       showGestureIndicator('✌️ Eraser');
     }
-    // Draw with eraser
     doAirDraw(lm, true);
     return;
   }
   if (S.wasErasing && !peace) {
-    // Switch back to brush on leaving peace
     setTool('brush');
     S.wasErasing = false;
     if (S.isDrawing) endStroke();
   }
 
-  // 4. Pinch → draw
   if (pinching) {
     if (!S.isDrawing) {
       pushUndoState();
@@ -485,26 +430,18 @@ function processGestures(lm) {
     return;
   }
 
-  // 5. No gesture — end stroke if was drawing
   if (S.wasPinching && S.isDrawing) endStroke();
   S.wasPinching = false;
   hideGestureIndicator();
 }
 
-// ── FIST SHAKE DETECTION ──────────────────
 function detectFistShake(lm) {
   const wristX = lm[0].x;
-
-  if (S.lastFistX === null) {
-    S.lastFistX = wristX;
-    return;
-  }
-
+  if (S.lastFistX === null) { S.lastFistX = wristX; return; }
   const delta = Math.abs(wristX - S.lastFistX);
-  if (delta > 0.04) { // threshold for significant wrist movement
+  if (delta > 0.04) {
     S.shakeCount++;
     if (S.shakeCount >= 3) {
-      // 3 direction changes = shake detected
       undo();
       S.shakeCount  = 0;
       S.fistHistory = [];
@@ -516,16 +453,12 @@ function detectFistShake(lm) {
   S.lastFistX = wristX;
 }
 
-// ── AIR DRAWING ───────────────────────────
 function doAirDraw(lm, erasing) {
-  const tip   = lm[8]; // index finger tip
-  const drawX = (1 - tip.x) * drawCanvas.width;  // mirror X
+  const tip   = lm[8];
+  const drawX = (1 - tip.x) * drawCanvas.width;
   const drawY = tip.y * drawCanvas.height;
-
-  // Draw on the main canvas
   applyBrush(drawX, drawY, erasing ? 'eraser' : S.tool);
 
-  // Draw cursor dot on overlay
   const ox = tip.x * overlayCanvas.width;
   const oy = tip.y * overlayCanvas.height;
   overlayCtx.save();
@@ -536,17 +469,17 @@ function doAirDraw(lm, erasing) {
   overlayCtx.restore();
 }
 
-// ── APPLY BRUSH / ERASER ──────────────────
+// ── BRUSH ─────────────────────────────────
 let _lastDrawX = null, _lastDrawY = null;
 
 function applyBrush(x, y, tool) {
   drawCtx.save();
-  drawCtx.globalAlpha   = tool === 'eraser' ? 1 : S.opacity;
+  drawCtx.globalAlpha              = tool === 'eraser' ? 1 : S.opacity;
   drawCtx.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
-  drawCtx.strokeStyle   = tool === 'eraser' ? 'rgba(0,0,0,1)' : S.color;
-  drawCtx.lineWidth     = tool === 'eraser' ? S.brushSize * 3 : S.brushSize;
-  drawCtx.lineCap       = 'round';
-  drawCtx.lineJoin      = 'round';
+  drawCtx.strokeStyle = tool === 'eraser' ? 'rgba(0,0,0,1)' : S.color;
+  drawCtx.lineWidth   = tool === 'eraser' ? S.brushSize * 3 : S.brushSize;
+  drawCtx.lineCap     = 'round';
+  drawCtx.lineJoin    = 'round';
 
   if (_lastDrawX !== null) {
     drawCtx.beginPath();
@@ -554,7 +487,6 @@ function applyBrush(x, y, tool) {
     drawCtx.lineTo(x, y);
     drawCtx.stroke();
   } else {
-    // Single dot for start of stroke
     drawCtx.beginPath();
     const r = (tool === 'eraser' ? S.brushSize * 3 : S.brushSize) / 2;
     drawCtx.arc(x, y, r, 0, Math.PI * 2);
@@ -567,45 +499,33 @@ function applyBrush(x, y, tool) {
 }
 
 function endStroke() {
-  S.isDrawing = false;
+  S.isDrawing   = false;
   S.wasPinching = false;
-  _lastDrawX = null;
-  _lastDrawY = null;
+  _lastDrawX    = null;
+  _lastDrawY    = null;
 }
 
-// ── GESTURE INDICATOR ─────────────────────
-let _gIndicatorTimer = null;
 function showGestureIndicator(text) {
-  gestureInd.textContent = text;
+  gestureInd.textContent  = text;
   gestureInd.style.display = 'block';
-  clearTimeout(_gIndicatorTimer);
-  _gIndicatorTimer = setTimeout(hideGestureIndicator, 1500);
+  clearTimeout(showGestureIndicator._t);
+  showGestureIndicator._t = setTimeout(hideGestureIndicator, 1500);
 }
-function hideGestureIndicator() {
-  gestureInd.style.display = 'none';
-}
+function hideGestureIndicator() { gestureInd.style.display = 'none'; }
 
-// ══════════════════════════════════════════
-//  MOUSE DRAWING
-// ══════════════════════════════════════════
+// ── MOUSE DRAWING ─────────────────────────
 function onMouseDown(e) {
   if (S.mode !== 'mouse') return;
   pushUndoState();
   S.mouseDown = true;
-  S.lastMouseX = e.offsetX;
-  S.lastMouseY = e.offsetY;
-  _lastDrawX   = null;
-  _lastDrawY   = null;
+  _lastDrawX  = null;
+  _lastDrawY  = null;
   applyBrush(e.offsetX, e.offsetY, S.tool);
 }
-
 function onMouseMove(e) {
   if (!S.mouseDown || S.mode !== 'mouse') return;
   applyBrush(e.offsetX, e.offsetY, S.tool);
-  S.lastMouseX = e.offsetX;
-  S.lastMouseY = e.offsetY;
 }
-
 function onMouseUp() {
   if (S.mode !== 'mouse') return;
   S.mouseDown = false;
@@ -613,244 +533,191 @@ function onMouseUp() {
   _lastDrawY  = null;
 }
 
-// ══════════════════════════════════════════
-//  UNDO STACK
-// ══════════════════════════════════════════
+// ── UNDO ──────────────────────────────────
 function pushUndoState() {
-  const snapshot = drawCtx.getImageData(0, 0, drawCanvas.width, drawCanvas.height);
-  S.undoStack.push(snapshot);
+  const snap = drawCtx.getImageData(0, 0, drawCanvas.width, drawCanvas.height);
+  S.undoStack.push(snap);
   if (S.undoStack.length > S.MAX_UNDO) S.undoStack.shift();
 }
-
 function undo() {
-  if (!S.undoStack.length) {
-    showToast('Nothing to undo');
-    return;
-  }
-  const snapshot = S.undoStack.pop();
-  drawCtx.putImageData(snapshot, 0, 0);
+  if (!S.undoStack.length) { showToast('Nothing to undo'); return; }
+  drawCtx.putImageData(S.undoStack.pop(), 0, 0);
   showToast('↩ Undo');
 }
-
 function clearCanvas() {
   pushUndoState();
   fillWhite();
   showToast('Canvas cleared');
 }
-
 function downloadCanvas() {
-  const link  = document.createElement('a');
+  const link    = document.createElement('a');
   link.download = 'airbrush-drawing.png';
   link.href     = drawCanvas.toDataURL('image/png');
   link.click();
 }
 
-// ══════════════════════════════════════════
-//  VOICE INPUT
-// ══════════════════════════════════════════
+// ── VOICE INPUT ───────────────────────────
 let recognition = null;
-
 function startVoice() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    showToast('Voice input not supported in this browser. Try Chrome.');
-    return;
-  }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { showToast('Voice not supported. Try Chrome.'); return; }
+  if (recognition) { recognition.stop(); return; }
 
-  // If already listening, stop and return (don't erase existing text)
-  if (recognition) {
-    recognition.stop();
-    return;
-  }
-
-  recognition = new SpeechRecognition();
-  recognition.lang           = 'en-US';
-  recognition.continuous     = false;
+  recognition = new SR();
+  recognition.lang = 'en-US';
+  recognition.continuous = false;
   recognition.interimResults = true;
 
   btnVoice.classList.add('listening');
   btnVoice.textContent = '🔴';
 
-  // Remember what was already typed so we append to it
-  const existingText = aiDescEl.value;
-  const prefix = existingText ? existingText.trimEnd() + ' ' : '';
-
+  const prefix = aiDescEl.value ? aiDescEl.value.trimEnd() + ' ' : '';
   recognition.onresult = e => {
-    let transcript = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      transcript += e.results[i][0].transcript;
-    }
-    // Append new speech after existing text
-    aiDescEl.value = prefix + transcript;
+    let t = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) t += e.results[i][0].transcript;
+    aiDescEl.value = prefix + t;
   };
-
-  recognition.onend = () => {
-    btnVoice.classList.remove('listening');
-    btnVoice.textContent = '🎤';
-    recognition = null;
-  };
-
-  recognition.onerror = e => {
-    console.warn('[voice]', e.error);
-    btnVoice.classList.remove('listening');
-    btnVoice.textContent = '🎤';
-    recognition = null;
-    showToast('Voice error: ' + e.error);
-  };
-
+  recognition.onend  = () => { btnVoice.classList.remove('listening'); btnVoice.textContent = '🎤'; recognition = null; };
+  recognition.onerror = e => { btnVoice.classList.remove('listening'); btnVoice.textContent = '🎤'; recognition = null; showToast('Voice error: ' + e.error); };
   recognition.start();
 }
 
-// ── AI GENERATION ─────────────────────────────────────────────────────────
+// ══════════════════════════════════════════
+//  AI GENERATION
+// ══════════════════════════════════════════
 
-// Save/load Anthropic key
-const savedKey = localStorage.getItem('anthropic-key');
-if (savedKey) document.getElementById('anthropic-key').value = savedKey;
-
-document.getElementById('btn-save-token')?.addEventListener('click', () => {
-  const key = document.getElementById('anthropic-key').value.trim();
-  if (key) {
-    localStorage.setItem('anthropic-key', key);
-    document.getElementById('btn-save-token').textContent = '✓ Saved';
-    setTimeout(() => document.getElementById('btn-save-token').textContent = 'Save', 2000);
-  }
-});
-
+// FIXED: checks for non-white pixels (canvas is white-filled, not transparent)
 function isCanvasBlank(canvas) {
-  const ctx = canvas.getContext('2d');
+  const ctx  = canvas.getContext('2d');
   const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-  for (let i = 3; i < data.length; i += 4) {
-    if (data[i] > 0) return false;  // found non-transparent pixel
+  for (let i = 0; i < data.length; i += 4) {
+    // If any pixel is not pure white → there is a drawing
+    if (data[i] !== 255 || data[i + 1] !== 255 || data[i + 2] !== 255) return false;
   }
   return true;
 }
 
 async function analyzeSketchWithClaude(base64Image, userDescription) {
-  const apiKey = document.getElementById('anthropic-key').value.trim()
+  const apiKey = (anthropicKeyEl ? anthropicKeyEl.value.trim() : '')
     || localStorage.getItem('anthropic-key') || '';
 
   if (!apiKey) {
-    // No key — fall back to a generic prompt
+    // No key — just use the description or a fallback
     return userDescription || 'a creative colorful artwork, vibrant colors';
   }
 
   const textPrompt = userDescription
     ? `I drew this sketch. My description: "${userDescription}". Create a detailed, vivid image generation prompt that combines my sketch and description. Return ONLY the prompt, no explanation.`
-    : `Analyze this hand-drawn sketch and create a detailed image generation prompt describing what you see. Include shapes, objects, colors, composition, and artistic style. Return ONLY the prompt text, no explanation.`;
+    : `Analyze this hand-drawn sketch and create a detailed image generation prompt. Describe shapes, objects, colors, composition, and suggest an artistic style. Return ONLY the prompt text, no explanation.`;
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 300,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: { type: 'base64', media_type: 'image/png', data: base64Image }
-          },
-          { type: 'text', text: textPrompt }
-        ]
-      }]
-    })
-  });
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 300,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64Image } },
+            { type: 'text',  text: textPrompt }
+          ]
+        }]
+      })
+    });
 
-  if (!response.ok) {
-    console.warn('Claude API error:', response.status);
+    if (!response.ok) {
+      console.warn('Claude API error:', response.status, await response.text());
+      return userDescription || 'a creative colorful artwork';
+    }
+
+    const data = await response.json();
+    return data.content?.[0]?.text?.trim() || userDescription || 'a creative colorful artwork';
+  } catch (err) {
+    console.warn('Claude fetch error:', err);
     return userDescription || 'a creative colorful artwork';
   }
-
-  const data = await response.json();
-  return data.content?.[0]?.text?.trim() || userDescription || 'a creative colorful artwork';
 }
 
 async function generateAI() {
-  const drawCanvas = document.getElementById('draw-canvas');
-  const description = (document.getElementById('ai-description')?.value || '').trim();
-  const style = document.getElementById('ai-style-select')?.value || 'digital art, highly detailed';
-
-  const blank = isCanvasBlank(drawCanvas);
+  const description = (aiDescEl?.value || '').trim();
+  const style       = (styleSelectEl?.value) || 'digital art, highly detailed';
+  const blank       = isCanvasBlank(drawCanvas);
 
   if (blank && !description) {
-    alert('Please draw something on the canvas or write a description first!');
+    showToast('Draw something or write a description first!');
     return;
   }
 
-  // Show loading
-  document.getElementById('ai-placeholder').style.display = 'none';
-  document.getElementById('ai-result-img').style.display = 'none';
-  document.getElementById('ai-actions').style.display = 'none';
-  document.getElementById('ai-loading').style.display = 'flex';
-  document.getElementById('btn-generate').disabled = true;
+  // Show loading state
+  aiPlaceholder.style.display = 'none';
+  aiResultImg.style.display   = 'none';
+  aiActions.style.display     = 'none';
+  aiLoading.style.display     = 'flex';
+  btnGenerate.disabled        = true;
 
-  const updateLoadingText = (text) => {
-    const el = document.getElementById('ai-loading-text');
-    if (el) el.textContent = text;
-  };
+  const setLoadingText = t => { if (aiLoadingText) aiLoadingText.textContent = t; };
 
   try {
     let finalPrompt = '';
 
     if (!blank) {
-      updateLoadingText('Reading your sketch…');
+      setLoadingText('Reading your sketch…');
       const base64 = drawCanvas.toDataURL('image/png').split(',')[1];
-      finalPrompt = await analyzeSketchWithClaude(base64, description);
+      finalPrompt   = await analyzeSketchWithClaude(base64, description);
     } else {
       finalPrompt = description;
     }
 
-    // Append style
     finalPrompt = `${finalPrompt}, ${style}`;
-    updateLoadingText('Generating image…');
+    setLoadingText('Generating image…');
 
-    // Generate with Pollinations.ai — free, fast, no key needed
-    const seed = Math.floor(Math.random() * 99999);
+    // Pollinations.ai — free, fast, no API key required
+    const seed    = Math.floor(Math.random() * 99999);
     const encoded = encodeURIComponent(finalPrompt);
     const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&nologo=true&seed=${seed}&model=flux`;
 
-    await new Promise((resolve, reject) => {
-      const img = document.getElementById('ai-result-img');
-      const timeout = setTimeout(() => reject(new Error('Timeout')), 60000);
+    // Save for gallery
+    S.lastDesc   = description;
+    S.lastSketch = blank ? null : drawCanvas.toDataURL('image/png');
 
-      img.onload = () => {
-        clearTimeout(timeout);
-        resolve();
-      };
-      img.onerror = () => {
-        clearTimeout(timeout);
-        reject(new Error('Image load failed'));
-      };
-      img.src = imageUrl;
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Timed out — try again')), 90000);
+      aiResultImg.onload  = () => { clearTimeout(timeout); resolve(); };
+      aiResultImg.onerror = () => { clearTimeout(timeout); reject(new Error('Image failed to load')); };
+      aiResultImg.src     = imageUrl;
     });
 
-    // Show result
-    document.getElementById('ai-loading').style.display = 'none';
-    document.getElementById('ai-result-img').style.display = 'block';
-    document.getElementById('ai-actions').style.display = 'flex';
+    S.lastGenerated = imageUrl;
+
+    aiLoading.style.display   = 'none';
+    aiResultImg.style.display = 'block';
+    aiActions.style.display   = 'flex';
 
   } catch (err) {
     console.error('Generation error:', err);
-    document.getElementById('ai-loading').style.display = 'none';
-    document.getElementById('ai-placeholder').style.display = 'flex';
-    document.getElementById('ai-placeholder').innerHTML =
-      `<span style="color:#EF4444">❌ Failed: ${err.message}. Try again!</span>`;
+    aiLoading.style.display     = 'none';
+    aiPlaceholder.style.display = 'flex';
+    aiPlaceholder.innerHTML     = `<span style="color:#EF4444">❌ ${err.message}. Try again!</span>`;
   } finally {
-    document.getElementById('btn-generate').disabled = false;
+    btnGenerate.disabled = false;
   }
 }
 
-// Wire up the generate button
-document.getElementById('btn-generate').addEventListener('click', generateAI);
+function saveAIImage() {
+  if (!S.lastGenerated) return;
+  const link    = document.createElement('a');
+  link.href     = S.lastGenerated;
+  link.download = `airbrush-ai-${Date.now()}.png`;
+  link.click();
+}
 
-// Retry button
-document.getElementById('btn-retry-ai')?.addEventListener('click', generateAI);
 // ══════════════════════════════════════════
 //  GALLERY
 // ══════════════════════════════════════════
@@ -872,7 +739,6 @@ function addToGallery() {
     description: S.lastDesc   || '',
     createdAt:   new Date().toLocaleDateString(),
   });
-  // Keep max 100 items
   if (items.length > 100) items.splice(100);
   saveGallery(items);
   showToast('✅ Saved to gallery!');
@@ -884,7 +750,6 @@ function openGalleryModal() {
   const empty = document.getElementById('gallery-empty');
   const items = getGallery();
 
-  // Clear old content (except empty placeholder)
   Array.from(grid.children).forEach(c => { if (c !== empty) c.remove(); });
 
   if (!items.length) {
@@ -919,13 +784,12 @@ function openGalleryModal() {
   modal.style.display = 'flex';
 }
 
-// ── STATUS ────────────────────────────────
+// ── STATUS & TOAST ────────────────────────
 function setStatus(type, msg) {
   statusDot.className    = 'status-dot ' + type;
   statusText.textContent = msg;
 }
 
-// ── TOAST ─────────────────────────────────
 let _toastTimer = null;
 function showToast(msg) {
   let toast = document.querySelector('.toast');
