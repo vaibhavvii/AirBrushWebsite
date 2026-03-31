@@ -145,18 +145,22 @@
   <summary class="ai-settings-toggle">⚙️ AI Settings</summary>
   <div class="ai-settings-body">
     <div class="settings-row">
-      <label>Model</label>
-      <select id="ai-model-select" class="ai-select">
-        <option value="stabilityai/stable-diffusion-2-1">Stable Diffusion 2.1</option>
-        <option value="runwayml/stable-diffusion-v1-5">Stable Diffusion 1.5</option>
-        <option value="CompVis/stable-diffusion-v1-4">Stable Diffusion 1.4</option>
-        <option value="prompthero/openjourney">OpenJourney</option>
+      <label>Style</label>
+      <select id="ai-style-select" class="ai-select">
+        <option value="digital art, highly detailed">Digital Art</option>
+        <option value="oil painting, impressionist">Oil Painting</option>
+        <option value="watercolor illustration">Watercolor</option>
+        <option value="anime style, vibrant colors">Anime</option>
+        <option value="photorealistic, 8k, HDR">Photorealistic</option>
+        <option value="sketch, pencil drawing">Pencil Sketch</option>
+        <option value="fantasy art, magical">Fantasy</option>
+        <option value="cyberpunk, neon lights">Cyberpunk</option>
       </select>
     </div>
     <div class="settings-row">
-      <label>HF Token <small>(optional — faster & no CORS issues)</small></label>
+      <label>Anthropic API Key <small>(for sketch reading — <a href="https://console.anthropic.com" target="_blank" style="color:#7C3AED">get one free</a>)</small></label>
       <div class="token-row">
-        <input type="password" id="hf-token" placeholder="hf_…" class="token-input"/>
+        <input type="password" id="anthropic-key" placeholder="sk-ant-…" class="token-input"/>
         <button class="btn-save-token" id="btn-save-token">Save</button>
       </div>
     </div>
