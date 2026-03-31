@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════
-   AIRBRUSH — signup.css
+   AIRBRUSH — signup.css  (v5 — webcam fix)
 ═══════════════════════════════════════════ */
 
 .auth-body {
@@ -200,22 +200,35 @@
   position: relative;
   width: 100%;
   aspect-ratio: 4/3;
-  background: #000;
+  background: #111;
   border-radius: var(--radius);
   overflow: hidden;
   border: 1px solid var(--border);
 }
 
-.cam-frame video,
-.cam-frame canvas {
+/* ★ FIX: video must be visible below transparent overlay */
+.cam-frame video {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  z-index: 1;
+  display: block;
+  opacity: 1;
+  visibility: visible;
 }
 
-#overlay-canvas { z-index: 2; }
+/* ★ FIX: overlay canvas must be transparent */
+#overlay-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  background: transparent !important;
+  pointer-events: none;
+}
 
 #draw-canvas {
   position: absolute;
@@ -224,7 +237,30 @@
   height: 100%;
   background: #fff;
   border-radius: var(--radius);
+  z-index: 1;
 }
+
+/* ── FACE BADGE ─────────────────────────── */
+.face-badge {
+  position: absolute;
+  bottom: 0.5rem;
+  right: 0.5rem;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(7,7,15,0.85);
+  border: 1px solid var(--border);
+  border-radius: 50px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.75rem;
+  color: var(--text-2);
+  backdrop-filter: blur(8px);
+  transition: var(--transition);
+}
+.face-badge.pass   { border-color: rgba(16,185,129,0.5); color: #10B981; }
+.face-badge.fail   { border-color: rgba(239,68,68,0.5);  color: #EF4444; }
+.face-badge.checking { border-color: rgba(245,158,11,0.5); color: #F59E0B; }
 
 /* ── PIN DISPLAY ────────────────────────── */
 .pin-display {
