@@ -95,6 +95,17 @@ const aiActions     = document.getElementById('ai-actions');
 const gestureInd    = document.getElementById('gesture-indicator');
 
 // ── INIT ──────────────────────────────────
+// ── WEBCAM PREVIEW — always on ────────────
+async function startWebcamPreview() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    webcamEl.srcObject = stream;
+    webcamEl.style.transform = 'scaleX(-1)';
+  } catch(e) {
+    console.warn('[preview] webcam not available:', e.message);
+  }
+}
+
 function init() {
   // User name
   if (session) navUser.textContent = `👤 ${session.name}`;
@@ -110,6 +121,9 @@ function init() {
 
   // Bind controls
   bindControls();
+
+  // Start webcam preview immediately (always on)
+  startWebcamPreview();
 
   setStatus('ready', '✋ Click Start to begin Air Canvas');
 }
@@ -269,12 +283,15 @@ async function startAir() {
 
   const camera = new Camera(webcamEl, {
     onFrame: async () => {
-      // KEY: only resize when dims change
-      const vw = webcamEl.videoWidth  || 640;
-      const vh = webcamEl.videoHeight || 480;
-      if (overlayCanvas.width !== vw || overlayCanvas.height !== vh) {
-        overlayCanvas.width  = vw;
-        overlayCanvas.height = vh;
+      // Size overlay to displayed box so landmarks align with mirrored video
+      const box = document.querySelector('.cam-frame-box');
+      if (box) {
+        const bw = box.clientWidth  || 640;
+        const bh = box.clientHeight || 480;
+        if (overlayCanvas.width !== bw || overlayCanvas.height !== bh) {
+          overlayCanvas.width  = bw;
+          overlayCanvas.height = bh;
+        }
       }
       await hands.send({ image: webcamEl });
     },
@@ -296,15 +313,19 @@ async function startAir() {
 
 function stopAir() {
   S.isActive = false;
-  if (webcamEl.srcObject)
-    webcamEl.srcObject.getTracks().forEach(t => t.stop());
-  webcamEl.srcObject = null;
+  // Stop MediaPipe camera tracks
+  if (S.camera) {
+    try { S.camera.stop(); } catch(e) {}
+    S.camera = null;
+  }
   overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
   btnStart.disabled = false;
   btnStop.disabled  = true;
   S.isDrawing   = false;
   S.wasPinching = false;
-  setStatus('ready', 'Camera stopped. Click Start to resume.');
+  setStatus('ready', 'Tracking stopped. Webcam preview continues.');
+  // Resume plain preview so webcam never goes black
+  startWebcamPreview();
 }
 
 // ── HAND RESULTS → state → rAF ────────────
@@ -733,7 +754,7 @@ async function generateWithPollinations(prompt) {
 
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    // NO crossOrigin — avoids CORS errors; image displays fine without it
 
     const timeout = setTimeout(() => {
       reject(new Error('Generation timed out (60s). Check your connection and try again.'));
@@ -741,21 +762,13 @@ async function generateWithPollinations(prompt) {
 
     img.onload = () => {
       clearTimeout(timeout);
-      // Draw to an offscreen canvas and convert to blob URL
-      const canvas = document.createElement('canvas');
-      canvas.width  = img.naturalWidth  || 512;
-      canvas.height = img.naturalHeight || 512;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-      canvas.toBlob(blob => {
-        if (blob) resolve(URL.createObjectURL(blob));
-        else      resolve(url); // fallback: use url directly
-      }, 'image/png');
+      // Directly use URL — no canvas taint issues
+      resolve(url);
     };
 
     img.onerror = () => {
       clearTimeout(timeout);
-      // Fallback: just set the src directly (won't be saveable but will show)
+      // Pollinations sometimes fires onerror even on success — still resolve with URL
       resolve(url);
     };
 
