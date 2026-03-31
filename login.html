@@ -82,6 +82,12 @@
         <p class="auth-sub" id="step2-sub">Reproduce the signature you used at sign-up.</p>
       </div>
 
+      <!-- Face verification badge — moved to top to avoid overlapping buttons -->
+      <div class="face-badge face-badge-top" id="face-badge">
+        <span id="face-icon">👤</span>
+        <span id="face-status">Face verification pending...</span>
+      </div>
+
       <!-- Status bar -->
       <div class="status-bar" id="status-bar">
         <span class="status-dot" id="status-dot"></span>
@@ -130,16 +136,8 @@
 
       </div><!-- end cam-area -->
 
-      <!-- Face verification badge -->
-      <div class="face-badge" id="face-badge">
-        <span id="face-icon">👤</span>
-        <span id="face-status">Face verification pending...</span>
-      </div>
-
-      <!-- Controls for Sign/Pattern -->
+      <!-- Controls for Sign/Pattern (drawing auto-detected on pinch) -->
       <div class="ctrl-row" id="draw-controls">
-        <button class="btn-ctrl green" id="btn-start">▶ Start Drawing</button>
-        <button class="btn-ctrl red"   id="btn-stop"  disabled>⬛ Stop</button>
         <button class="btn-ctrl blue"  id="btn-clear-draw">🗑 Clear</button>
       </div>
 
@@ -193,7 +191,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
   <script src="js/login.js"></script>
 </body>
 </html>
