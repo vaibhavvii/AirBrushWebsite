@@ -16,7 +16,7 @@ const state = {
   pinDigits: [], pinCurrentDigit: 0, pinCurrentCount: -1,
   pinTimer: null, pinCountdown: 3,
   modelsLoaded: false, faceResult: null, faceDistance: Infinity,
-  FACE_THRESHOLD: 0.50, PATH_THRESHOLD: 0.45,
+  FACE_THRESHOLD: 0.65, PATH_THRESHOLD: 0.45,
   faceLoopRunning: false,
   wasPinching: false, gestureHoldFrames: 0,
   latestLandmarks: null, latestHandResults: null,
@@ -121,33 +121,18 @@ async function startCamera() {
   _bestFaceDist = Infinity;
 
   try {
-    setStatus('loading', 'Loading face models (first load may take 10–20s)…');
-    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+    setStatus('loading', 'Loading face models…');
+    const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
     await Promise.all([
-      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
       faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
     ]);
     state.modelsLoaded = true;
-    state.useSSD = true;
-    setStatus('loading', 'Face models loaded ✓ Starting webcam…');
+    setStatus('loading', 'Starting webcam…');
   } catch (e) {
-    console.warn('[login] SSD model failed, falling back to tinyFaceDetector:', e);
-    try {
-      const FALLBACK_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(FALLBACK_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(FALLBACK_URL),
-        faceapi.nets.faceRecognitionNet.loadFromUri(FALLBACK_URL),
-      ]);
-      state.modelsLoaded = true;
-      state.useSSD = false;
-      setStatus('loading', 'Face models loaded (fallback) ✓ Starting webcam…');
-    } catch (e2) {
-      setStatus('error', 'Could not load face models. Check your internet connection and reload.');
-      console.error('[login] Both model sources failed:', e2);
-      return;
-    }
+    setStatus('error', 'Could not load face models. Reload the page.');
+    return;
   }
 
   const hands = new Hands({
@@ -450,13 +435,11 @@ function updatePinUI() {
 async function runFaceVerification() {
   if (!state.faceLoopRunning) return;
   if (!state.modelsLoaded || !webcamEl.videoWidth) {
-    setTimeout(runFaceVerification, 1000);
+    setTimeout(runFaceVerification, 500);
     return;
   }
   try {
-    const opts = state.useSSD
-      ? new faceapi.SsdMobilenetv1Options({ minConfidence: 0.4 })
-      : new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 });
+    const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.1 });
     const det  = await faceapi.detectSingleFace(webcamEl, opts)
       .withFaceLandmarks().withFaceDescriptor();
     if (det) {
@@ -499,7 +482,7 @@ async function runFaceVerification() {
     console.warn('[login] face err:', e.message);
     setFaceBadge('checking', '⏳', 'Retrying face scan…');
   }
-  setTimeout(runFaceVerification, 900);
+  setTimeout(runFaceVerification, 600);
 }
 
 function euclideanDist(a, b) {
