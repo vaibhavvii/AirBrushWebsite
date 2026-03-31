@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Canvas — AirBrush</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css"/>
+  <link rel="stylesheet" href="css/canvas.css"/>
+</head>
+<body class="canvas-body">
+
+  <!-- ══════════════════════════════════
+       NAVBAR
+  ══════════════════════════════════ -->
+  <nav class="canvas-nav">
+    <a href="index.html" class="nav-logo">
+      <div class="logo-icon">
+        <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+          <circle cx="16" cy="16" r="15" stroke="url(#lg1)" stroke-width="1.5"/>
+          <path d="M8 22 Q12 10 16 14 Q20 18 24 8" stroke="url(#lg2)" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+          <circle cx="24" cy="8" r="2.5" fill="url(#lg2)"/>
+          <defs>
+            <linearGradient id="lg1" x1="0" y1="0" x2="32" y2="32">
+              <stop offset="0%" stop-color="#7C3AED"/>
+              <stop offset="100%" stop-color="#06B6D4"/>
+            </linearGradient>
+            <linearGradient id="lg2" x1="8" y1="22" x2="24" y2="8">
+              <stop offset="0%" stop-color="#7C3AED"/>
+              <stop offset="100%" stop-color="#06B6D4"/>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <span class="logo-text">AirBrush</span>
+    </a>
+
+    <div class="nav-center">
+      <div class="mode-toggle" id="mode-toggle">
+        <button class="mode-btn active" id="btn-air-mode" title="Air Canvas — draw with hand gestures">
+          ✋ Air Canvas
+        </button>
+        <button class="mode-btn" id="btn-mouse-mode" title="Mouse mode — draw with your mouse">
+          🖱 Mouse
+        </button>
+      </div>
+    </div>
+
+    <div class="nav-right">
+      <span class="nav-user" id="nav-user">👤 Loading…</span>
+      <button class="btn-nav-ghost" id="btn-logout">Log Out</button>
+    </div>
+  </nav>
+
+  <!-- ══════════════════════════════════
+       MAIN LAYOUT
+  ══════════════════════════════════ -->
+  <main class="canvas-main">
+
+    <!-- ── LEFT SIDEBAR ───────────────── -->
+    <aside class="canvas-sidebar">
+
+      <div class="sidebar-section">
+        <div class="sidebar-label">Status</div>
+        <div class="status-bar sidebar-status" id="status-bar">
+          <span class="status-dot loading" id="status-dot"></span>
+          <span id="status-text">Loading…</span>
+        </div>
+      </div>
+
+      <!-- Brush Controls -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">Brush</div>
+        <div class="tool-row">
+          <button class="tool-btn active" id="btn-brush" title="Brush tool">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.07"/>
+              <path d="M7.07 14.94c-1.66 0-3 1.34-3 3 0 1.31-1.16 2-2 2 .92 1.22 2.49 2 4 2 2.21 0 4-1.79 4-4 0-1.66-1.34-3-3-3z"/>
+            </svg>
+          </button>
+          <button class="tool-btn" id="btn-eraser" title="Eraser">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 20H7L3 16l10-10 7 7-1.5 1.5"/>
+              <path d="M6.5 17.5l-4-4"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Colour Picker -->
+        <div class="color-section">
+          <div class="sidebar-label-sm">Colour</div>
+          <div class="color-swatches" id="color-swatches">
+            <div class="swatch active" data-color="#6C63FF" style="background:#6C63FF"></div>
+            <div class="swatch" data-color="#06B6D4"  style="background:#06B6D4"></div>
+            <div class="swatch" data-color="#EC4899"  style="background:#EC4899"></div>
+            <div class="swatch" data-color="#F59E0B"  style="background:#F59E0B"></div>
+            <div class="swatch" data-color="#10B981"  style="background:#10B981"></div>
+            <div class="swatch" data-color="#EF4444"  style="background:#EF4444"></div>
+            <div class="swatch" data-color="#1E1B4B"  style="background:#1E1B4B"></div>
+            <div class="swatch" data-color="#000000"  style="background:#000000"></div>
+          </div>
+          <input type="color" id="color-custom" value="#6C63FF" title="Custom colour" style="width:100%;height:32px;border-radius:6px;border:none;cursor:pointer;margin-top:6px;"/>
+        </div>
+
+        <!-- Brush Size -->
+        <div class="color-section">
+          <div class="sidebar-label-sm">Size: <span id="size-label">4</span>px</div>
+          <input type="range" id="brush-size" min="1" max="40" value="4" class="range-slider"/>
+        </div>
+
+        <!-- Opacity -->
+        <div class="color-section">
+          <div class="sidebar-label-sm">Opacity: <span id="opacity-label">100</span>%</div>
+          <input type="range" id="brush-opacity" min="10" max="100" value="100" class="range-slider"/>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">Actions</div>
+        <button class="action-btn" id="btn-undo">↩ Undo</button>
+        <button class="action-btn" id="btn-clear">🗑 Clear Canvas</button>
+        <button class="action-btn" id="btn-download">⬇ Save Image</button>
+      </div>
+
+      <!-- Gesture Guide -->
+      <div class="sidebar-section gesture-guide" id="gesture-guide">
+        <div class="sidebar-label">Gestures</div>
+        <div class="gesture-item">
+          <span class="gesture-icon">👌</span>
+          <span>Pinch = Draw</span>
+        </div>
+        <div class="gesture-item">
+          <span class="gesture-icon">☝️✌️</span>
+          <span>2 fingers = Eraser</span>
+        </div>
+        <div class="gesture-item">
+          <span class="gesture-icon">✊</span>
+          <span>Fist shake = Undo</span>
+        </div>
+        <div class="gesture-item">
+          <span class="gesture-icon">🖐</span>
+          <span>Open palm = Stop</span>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- ── CENTRE AREA ─────────────────── -->
+    <section class="canvas-area">
+
+      <!-- Webcam + Drawing side by side -->
+      <div class="dual-view">
+
+        <!-- Webcam -->
+        <div class="cam-panel" id="cam-panel">
+          <div class="panel-label">📷 Live Camera</div>
+          <div class="cam-frame-box">
+            <video id="webcam" autoplay muted playsinline></video>
+            <canvas id="overlay-canvas"></canvas>
+            <!-- Gesture indicator overlay -->
+            <div class="gesture-indicator" id="gesture-indicator"></div>
+          </div>
+          <div class="cam-controls">
+            <button class="ctrl-btn green" id="btn-start">▶ Start</button>
+            <button class="ctrl-btn red"   id="btn-stop" disabled>⏹ Stop</button>
+          </div>
+        </div>
+
+        <!-- Drawing Canvas -->
+        <div class="draw-panel">
+          <div class="panel-label">🎨 Drawing Canvas</div>
+          <div class="draw-frame-box">
+            <canvas id="draw-canvas"></canvas>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- AI Generation Row -->
+      <div class="ai-row">
+        <div class="ai-input-wrap">
+          <input
+            type="text"
+            id="ai-description"
+            class="ai-input"
+            placeholder="Describe what you drew (optional)… or click 🎤 to speak"
+          />
+          <button class="voice-btn" id="btn-voice" title="Voice input">🎤</button>
+        </div>
+        <button class="btn-generate" id="btn-generate">
+          <span id="gen-icon">✨</span>
+          <span id="gen-text">Generate AI Art</span>
+        </button>
+      </div>
+
+    </section>
+
+    <!-- ── RIGHT: AI RESULT ──────────────── -->
+    <aside class="ai-panel">
+      <div class="sidebar-label">AI Output</div>
+
+      <div class="ai-result-box" id="ai-result-box">
+        <div class="ai-placeholder" id="ai-placeholder">
+          <div class="ai-placeholder-icon">🎨</div>
+          <p>Draw something on the canvas, then click <strong>Generate AI Art</strong></p>
+        </div>
+        <img id="ai-result-img" src="" alt="AI generated art" style="display:none;"/>
+        <div class="ai-loading" id="ai-loading" style="display:none;">
+          <div class="ai-spinner"></div>
+          <p id="ai-loading-text">Generating your art…</p>
+        </div>
+      </div>
+
+      <div class="ai-actions" id="ai-actions" style="display:none;">
+        <button class="action-btn" id="btn-save-ai">⬇ Save AI Art</button>
+        <button class="action-btn" id="btn-retry-ai">🔄 Retry</button>
+      </div>
+
+      <div class="ai-model-info">
+        <div class="sidebar-label">AI Model</div>
+        <select id="ai-model-select" class="model-select">
+          <option value="stabilityai/stable-diffusion-xl-base-1.0">SD XL Base (best)</option>
+          <option value="runwayml/stable-diffusion-v1-5">SD v1.5 (fast)</option>
+          <option value="prompthero/openjourney">OpenJourney</option>
+          <option value="dreamlike-art/dreamlike-photoreal-2.0">Dreamlike Photo</option>
+        </select>
+        <p class="model-note">Free via Hugging Face Inference API. May queue briefly.</p>
+
+        <div class="hf-token-wrap">
+          <div class="sidebar-label-sm">HF Token (optional, for priority)</div>
+          <input type="password" id="hf-token" placeholder="hf_…" class="token-input"/>
+          <button class="action-btn" id="btn-save-token">Save Token</button>
+        </div>
+      </div>
+
+    </aside>
+
+  </main>
+
+  <!-- MediaPipe + face-api CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="js/canvas.js"></script>
+</body>
+</html>
