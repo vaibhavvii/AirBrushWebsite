@@ -141,28 +141,27 @@
           <button class="voice-btn" id="btn-voice" title="Voice input">🎤</button>
         </div>
 
-        <details class="ai-settings">
-          <summary class="ai-settings-toggle">⚙️ AI Settings</summary>
-          <div class="ai-settings-body">
-            <div class="settings-row">
-              <label>Model</label>
-              <select id="ai-model-select" class="ai-select">
-                <option value="stabilityai/stable-diffusion-2-1">Stable Diffusion 2.1</option>
-                <option value="runwayml/stable-diffusion-v1-5">Stable Diffusion 1.5</option>
-                <option value="CompVis/stable-diffusion-v1-4">Stable Diffusion 1.4</option>
-                <option value="prompthero/openjourney">OpenJourney</option>
-              </select>
-            </div>
-            <div class="settings-row">
-              <label>HF Token <small>(optional — faster & no CORS issues)</small></label>
-              <div class="token-row">
-                <input type="password" id="hf-token" placeholder="hf_…" class="token-input"/>
-                <button class="btn-save-token" id="btn-save-token">Save</button>
-              </div>
-            </div>
-          </div>
-        </details>
-
+       <details class="ai-settings">
+  <summary class="ai-settings-toggle">⚙️ AI Settings</summary>
+  <div class="ai-settings-body">
+    <div class="settings-row">
+      <label>Model</label>
+      <select id="ai-model-select" class="ai-select">
+        <option value="stabilityai/stable-diffusion-2-1">Stable Diffusion 2.1</option>
+        <option value="runwayml/stable-diffusion-v1-5">Stable Diffusion 1.5</option>
+        <option value="CompVis/stable-diffusion-v1-4">Stable Diffusion 1.4</option>
+        <option value="prompthero/openjourney">OpenJourney</option>
+      </select>
+    </div>
+    <div class="settings-row">
+      <label>HF Token <small>(optional — faster & no CORS issues)</small></label>
+      <div class="token-row">
+        <input type="password" id="hf-token" placeholder="hf_…" class="token-input"/>
+        <button class="btn-save-token" id="btn-save-token">Save</button>
+      </div>
+    </div>
+  </div>
+</details>
         <button class="btn-generate" id="btn-generate">✨ Generate AI Art</button>
 
         <div class="ai-result-box">
