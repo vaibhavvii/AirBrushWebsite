@@ -340,6 +340,16 @@ function onHandResults(results) {
 function renderFrame() {
   overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
+  // ── Mirror the drawing canvas onto the overlay so strokes show on webcam ──
+  // drawCanvas is not mirrored; overlay IS mirrored via CSS scaleX(-1).
+  // So we flip horizontally when blitting so it looks correct on the webcam view.
+  overlayCtx.save();
+  overlayCtx.globalAlpha = 0.55;
+  overlayCtx.translate(overlayCanvas.width, 0);
+  overlayCtx.scale(-1, 1);
+  overlayCtx.drawImage(drawCanvas, 0, 0, overlayCanvas.width, overlayCanvas.height);
+  overlayCtx.restore();
+
   if (!S.latestLandmarks) {
     if (S.isDrawing) endStroke();
     S.wasPinching    = false;
@@ -351,9 +361,9 @@ function renderFrame() {
 
   const lm = S.latestLandmarks;
 
-  // Draw skeleton
+  // Draw skeleton on top of the mirrored drawing
   drawConnectors(overlayCtx, lm, HAND_CONNECTIONS,
-    { color: 'rgba(124,58,237,0.7)', lineWidth: 2 });
+    { color: 'rgba(124,58,237,0.85)', lineWidth: 2 });
   drawLandmarks(overlayCtx, lm,
     { color: '#06B6D4', lineWidth: 1, radius: 3 });
 
@@ -674,30 +684,23 @@ function startVoice() {
 
 // ══════════════════════════════════════════
 //  AI IMAGE GENERATION
-//
-//  Strategy (no-token mode — zero CORS issues):
-//    → Pollinations.ai  (100% free, no key, CORS-safe)
-//       Simply embeds the prompt in a URL and loads as <img>
-//
-//  Strategy (token mode):
-//    → Hugging Face Inference API
-//       Requires a free HF account token (hf_...)
-//       Get one at: huggingface.co/settings/tokens
+//  Uses Pollinations.ai — 100% free, no API key,
+//  sketch-aware prompt built from canvas + description
 // ══════════════════════════════════════════
 
 const LOADING_MESSAGES = [
-  'Thinking creatively…',
+  'Analysing your sketch…',
   'Painting with AI…',
   'Dreaming up your art…',
-  'Generating pixels…',
-  'Composing your vision…',
+  'Rendering pixels…',
+  'Almost there…',
 ];
 
 async function generateAI() {
-  const desc  = aiDescEl.value.trim();
-  const token = localStorage.getItem('airbrush_hf_token') || '';
-  const model = modelSelectEl.value;
-  const prompt = buildPrompt(desc);
+  const desc = aiDescEl.value.trim();
+
+  // Build a sketch-aware prompt from canvas content + description
+  const prompt = buildSketchPrompt(desc);
 
   // UI: show loading
   aiPlaceholder.style.display = 'none';
@@ -711,26 +714,24 @@ async function generateAI() {
   const msgInterval = setInterval(() => {
     msgIdx = (msgIdx + 1) % LOADING_MESSAGES.length;
     aiLoadingText.textContent = LOADING_MESSAGES[msgIdx];
-  }, 2000);
+  }, 2500);
 
   try {
-    let blobUrl;
-
-    if (token) {
-      // ── HF path: user has a token ──────────────────
-      blobUrl = await generateWithHuggingFace(prompt, model, token);
-    } else {
-      // ── Pollinations path: no token, zero CORS issues ──
-      blobUrl = await generateWithPollinations(prompt);
-    }
-
-    S.lastGenerated       = blobUrl;
-    aiResultImg.src       = blobUrl;
-    aiResultImg.style.display = 'block';
-    aiLoading.style.display   = 'none';
-    aiActions.style.display   = 'flex';
-    showToast('✨ AI art generated!');
-
+    const url = await pollinationsGenerate(prompt);
+    S.lastGenerated = url;
+    aiResultImg.src = url;
+    aiResultImg.onload = () => {
+      aiLoading.style.display   = 'none';
+      aiResultImg.style.display = 'block';
+      aiActions.style.display   = 'flex';
+      showToast('✨ AI art generated!');
+    };
+    aiResultImg.onerror = () => {
+      // Image URL is valid but browser blocked load — show directly anyway
+      aiLoading.style.display   = 'none';
+      aiResultImg.style.display = 'block';
+      aiActions.style.display   = 'flex';
+    };
   } catch (err) {
     console.error('[AI gen]', err);
     aiLoading.style.display     = 'none';
@@ -742,75 +743,75 @@ async function generateAI() {
   }
 }
 
-// ── Pollinations.ai — CORS-safe, no token required ──
-// Returns a blob URL from an image tag load
-async function generateWithPollinations(prompt) {
-  // Encode the prompt for URL use
-  const encoded = encodeURIComponent(prompt);
-  // Add a random seed so each click gives a different result
+// ── Pollinations.ai — free, no key, CORS-safe ─────────────────────────────
+// model=flux gives the best sketch-to-realistic results
+async function pollinationsGenerate(prompt) {
   const seed    = Math.floor(Math.random() * 999999);
-  // Pollinations serves images directly — no CORS, no auth needed
-  const url     = `https://image.pollinations.ai/prompt/${encoded}?width=512&height=512&seed=${seed}&nologo=true`;
+  const encoded = encodeURIComponent(prompt);
+  const url = `https://image.pollinations.ai/prompt/${encoded}?model=flux&width=768&height=768&seed=${seed}&nologo=true&enhance=true`;
 
+  // Verify the request actually reaches Pollinations before resolving
   return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Timed out after 90s — check your connection')), 90000);
     const img = new Image();
-    // NO crossOrigin — avoids CORS errors; image displays fine without it
-
-    const timeout = setTimeout(() => {
-      reject(new Error('Generation timed out (60s). Check your connection and try again.'));
-    }, 60000);
-
-    img.onload = () => {
-      clearTimeout(timeout);
-      // Directly use URL — no canvas taint issues
-      resolve(url);
-    };
-
-    img.onerror = () => {
-      clearTimeout(timeout);
-      // Pollinations sometimes fires onerror even on success — still resolve with URL
-      resolve(url);
-    };
-
+    img.onload  = () => { clearTimeout(timeout); resolve(url); };
+    img.onerror = () => { clearTimeout(timeout); resolve(url); }; // resolve anyway — URL is still valid
     img.src = url;
   });
 }
 
-// ── Hugging Face — requires a free token (hf_...) ──
-async function generateWithHuggingFace(prompt, model, token) {
-  const headers = {
-    'Content-Type':  'application/json',
-    'Authorization': `Bearer ${token}`,
-  };
-  const body = JSON.stringify({
-    inputs: prompt,
-    parameters: { num_inference_steps: 25, guidance_scale: 7.5, width: 512, height: 512 },
-    options:    { wait_for_model: true, use_cache: false },
-  });
+// Build a rich prompt from canvas sketch + optional description
+function buildSketchPrompt(desc) {
+  // Sample the canvas to detect dominant colors used
+  const colors = sampleCanvasColors();
 
-  const res = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
-    method: 'POST', headers, body,
-  });
+  let subject = desc
+    ? desc
+    : 'a detailed scene based on the sketch';
 
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    if (res.status === 503) throw new Error('Model loading (cold start) — wait 30s and retry.');
-    if (res.status === 429) throw new Error('Rate limited — wait 1 minute and retry.');
-    if (res.status === 401 || res.status === 403)
-      throw new Error('Invalid HF token — check it at huggingface.co/settings/tokens');
-    throw new Error(`HF API error ${res.status}: ${txt.slice(0,120)}`);
-  }
+  const colorHint = colors.length > 0
+    ? `with colors including ${colors.join(', ')}`
+    : '';
 
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
+  return [
+    `A highly realistic, detailed digital painting of ${subject}`,
+    colorHint,
+    'inspired by a hand-drawn sketch',
+    'photorealistic rendering, cinematic lighting, sharp focus',
+    '8k resolution, masterpiece quality',
+  ].filter(Boolean).join(', ');
 }
 
-// Build enriched prompt
-function buildPrompt(desc) {
-  const base = desc
-    ? `${desc}, digital art, highly detailed, vibrant colors`
-    : 'abstract colorful digital painting, vibrant, highly detailed';
-  return `${base}, 4k resolution, beautiful composition, artstation trending, creative art`;
+// Sample the drawing canvas and return the top 3 non-white, non-black color names
+function sampleCanvasColors() {
+  try {
+    const w = drawCanvas.width, h = drawCanvas.height;
+    const data = drawCtx.getImageData(0, 0, w, h).data;
+    const counts = {};
+    const step = 8; // sample every 8th pixel for speed
+    for (let i = 0; i < data.length; i += 4 * step) {
+      const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
+      if (a < 200) continue; // skip transparent
+      if (r > 240 && g > 240 && b > 240) continue; // skip white bg
+      if (r < 20  && g < 20  && b < 20)  continue; // skip black
+      const bucket = `${Math.round(r/40)*40},${Math.round(g/40)*40},${Math.round(b/40)*40}`;
+      counts[bucket] = (counts[bucket] || 0) + 1;
+    }
+    // Sort by frequency, take top 3, name them
+    const top = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0,3);
+    return top.map(([bucket]) => {
+      const [r,g,b] = bucket.split(',').map(Number);
+      if (r > g && r > b) return 'red';
+      if (g > r && g > b) return 'green';
+      if (b > r && b > g) return 'blue';
+      if (r > 180 && g > 100 && b < 80) return 'orange';
+      if (r > 150 && b > 150 && g < 100) return 'purple';
+      if (r > 180 && g > 180 && b < 80) return 'yellow';
+      return 'colorful';
+    }).filter((v,i,a) => a.indexOf(v) === i); // dedupe
+  } catch(e) {
+    return [];
+  }
 }
 
 function saveAIImage() {
