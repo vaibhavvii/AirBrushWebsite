@@ -1,11 +1,12 @@
 // ═══════════════════════════════════════════
-//  AIRBRUSH — login.js
-//  Login: verify gesture auth + face 2FA
+//  AIRBRUSH — login.js  (FIXED v2)
+//  Fixes: face threshold, continuous retry,
+//         path threshold, descriptor safety
 // ═══════════════════════════════════════════
 
 // ── STATE ────────────────────────────────
 const state = {
-  user: null,            // matched user object from localStorage
+  user: null,
   isDrawing: false,
   drawPoints: [],
   overlayStrokes: [],
@@ -17,10 +18,19 @@ const state = {
   pinTimer: null,
   pinCountdown: 3,
   modelsLoaded: false,
-  faceResult: null,      // 'pass' | 'fail' | null
+  faceResult: null,       // 'pass' | 'fail' | null
   faceDistance: Infinity,
-  FACE_THRESHOLD: 0.52,  // lower = stricter (0.6 is face-api default)
-  PATH_THRESHOLD: 0.28,  // normalized DTW threshold for sign/pattern
+
+  // FIX 1: Raised threshold 0.52 → 0.65
+  // face-api default is 0.6; real-world lighting variance
+  // can push the same-person distance to 0.55–0.63.
+  FACE_THRESHOLD: 0.65,
+
+  // FIX 2: Raised path threshold 0.28 → 0.45
+  // 0.28 was too strict for natural hand variation.
+  PATH_THRESHOLD: 0.45,
+
+  faceLoopRunning: false,
 };
 
 // ── DOM REFS ─────────────────────────────
@@ -57,7 +67,6 @@ const drawCanvas    = document.getElementById('draw-canvas');
 const overlayCtx    = overlayCanvas.getContext('2d');
 const drawCtx       = drawCanvas.getContext('2d');
 
-// Mirror webcam feed (selfie view)
 webcamEl.style.transform      = 'scaleX(-1)';
 overlayCanvas.style.transform = 'scaleX(-1)';
 
@@ -72,6 +81,12 @@ btnNext.addEventListener('click', () => {
 
   if (!match)
     return showError(err1, 'No account found with that email. Please sign up first.');
+
+  // FIX 3: Validate stored descriptor upfront
+  if (!match.faceDescriptor || !Array.isArray(match.faceDescriptor) || match.faceDescriptor.length < 128) {
+    return showError(err1,
+      'Your account has no valid face data. Please sign up again to re-enrol.');
+  }
 
   hideError(err1);
   state.user = match;
@@ -122,6 +137,7 @@ function initDrawCanvas() {
 // ── CAMERA & MEDIAPIPE ───────────────────
 async function startCamera() {
   setStatus('loading', 'Loading AI models...');
+  state.faceLoopRunning = false;
 
   try {
     const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
@@ -143,8 +159,9 @@ async function startCamera() {
   hands.setOptions({
     maxNumHands: 2,
     modelComplexity: 1,
-    minDetectionConfidence: 0.7,
-    minTrackingConfidence: 0.7,
+    // FIX 4: Lower confidence thresholds for better detection in varied conditions
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
   });
   hands.onResults(onHandResults);
 
@@ -159,12 +176,15 @@ async function startCamera() {
   });
 
   camera.start().then(() => {
-    setStatus('ready', 'Camera ready — hand tracking active ✓');
-    // Start continuous face verification loop
-    runFaceVerification();
+    setStatus('ready', 'Camera ready — look at the camera for face verification ✓');
+    // FIX 5: Single-start guard prevents duplicate loops
+    if (!state.faceLoopRunning) {
+      state.faceLoopRunning = true;
+      runFaceVerification();
+    }
     if (state.user.method === 'pin') updatePinUI();
   }).catch(e => {
-    setStatus('error', 'Camera access denied.');
+    setStatus('error', 'Camera access denied. Allow camera permission and reload.');
     showError(err2, e.message);
   });
 }
@@ -209,8 +229,6 @@ function handleDrawing(results) {
   if (!landmarks) return;
 
   const tip = landmarks[8];
-
-  // Draw canvas (manually mirrored → left-to-right natural)
   const drawX = (1 - tip.x) * drawCanvas.width;
   const drawY = tip.y * drawCanvas.height;
   state.drawPoints.push({ x: drawX, y: drawY });
@@ -227,7 +245,6 @@ function handleDrawing(results) {
     drawCtx.stroke();
   }
 
-  // Overlay (CSS mirrored → raw coords)
   const overlayX = tip.x * overlayCanvas.width;
   const overlayY = tip.y * overlayCanvas.height;
   if (!state.currentOverlayStroke) state.currentOverlayStroke = [];
@@ -324,40 +341,99 @@ function updatePinUI() {
   if (el) el.classList.add('active');
 }
 
-// ── FACE VERIFICATION LOOP ────────────────
-// Runs every 2 seconds in background while user does gesture auth
-async function runFaceVerification() {
-  if (!state.modelsLoaded) { setTimeout(runFaceVerification, 1500); return; }
+// ══════════════════════════════════════════
+//  FACE VERIFICATION LOOP — FIXED
+// ══════════════════════════════════════════
+// What was broken and what changed:
+//
+// Bug 1 — FACE_THRESHOLD was 0.52 (too strict).
+//   Same person can score 0.54–0.62 under different lighting.
+//   Fix: raised to 0.65.
+//
+// Bug 2 — Loop stopped retrying once it got a 'pass'.
+//   If a pass frame was transient the loop went silent.
+//   Fix: loop ALWAYS reschedules regardless of result.
+//
+// Bug 3 — TinyFaceDetector default scoreThreshold (0.5) misses
+//   faces that are slightly angled or in lower light.
+//   Fix: explicitly set scoreThreshold: 0.35.
+//
+// Bug 4 — Stored descriptor reconstructed with new Float32Array(array)
+//   works for plain arrays, but fails if JSON parsed the array as an
+//   object (edge case in some browsers). Fix: use Object.values() fallback.
+//
+// Bug 5 — _bestFaceDist tracks the closest distance across all frames
+//   so btnVerify also checks the best distance, not just the latest frame.
+// ══════════════════════════════════════════
 
-  setFaceBadge('checking', '👁', 'Verifying face...');
+let _bestFaceDist = Infinity;
+
+async function runFaceVerification() {
+  if (!state.faceLoopRunning) return;   // stopped (camera closed)
+  if (!state.modelsLoaded)   { setTimeout(runFaceVerification, 1500); return; }
+
   try {
+    const options = new faceapi.TinyFaceDetectorOptions({
+      inputSize: 320,
+      scoreThreshold: 0.35,   // more permissive than default 0.5
+    });
+
     const detection = await faceapi
-      .detectSingleFace(webcamEl, new faceapi.TinyFaceDetectorOptions())
+      .detectSingleFace(webcamEl, options)
       .withFaceLandmarks()
       .withFaceDescriptor();
 
     if (detection) {
-      const stored = new Float32Array(state.user.faceDescriptor);
-      const live   = detection.descriptor;
-      const dist   = euclideanDist(stored, live);
-      state.faceDistance = dist;
+      // Safe descriptor reconstruction
+      const rawStored = state.user.faceDescriptor;
+      let stored;
+      if (rawStored instanceof Float32Array) {
+        stored = rawStored;
+      } else if (Array.isArray(rawStored)) {
+        stored = new Float32Array(rawStored);
+      } else {
+        stored = new Float32Array(Object.values(rawStored));
+      }
+
+      const live = detection.descriptor;
+
+      if (stored.length !== live.length) {
+        setFaceBadge('fail', '⚠️', 'Face model mismatch — please sign up again');
+        setTimeout(runFaceVerification, 3000);
+        return;
+      }
+
+      const dist  = euclideanDist(stored, live);
+      if (dist < _bestFaceDist) _bestFaceDist = dist;
+
+      const score = (1 - dist).toFixed(2);
+      const best  = (1 - _bestFaceDist).toFixed(2);
+      const need  = (1 - state.FACE_THRESHOLD).toFixed(2);
 
       if (dist < state.FACE_THRESHOLD) {
         state.faceResult = 'pass';
-        setFaceBadge('pass', '✅', `Face matched (score ${(1 - dist).toFixed(2)})`);
+        setFaceBadge('pass', '✅', `Face matched ✓  (score ${score})`);
       } else {
-        state.faceResult = 'fail';
-        setFaceBadge('fail', '❌', `Face mismatch (score ${(1 - dist).toFixed(2)})`);
-        // Keep retrying — user might adjust position
-        setTimeout(runFaceVerification, 2500);
+        if (state.faceResult !== 'pass') state.faceResult = 'fail';
+        setFaceBadge(
+          state.faceResult === 'pass' ? 'pass' : 'fail',
+          state.faceResult === 'pass' ? '✅' : '❌',
+          `Score: ${score}  Best: ${best}  (need >${need})`
+        );
       }
     } else {
-      setFaceBadge('checking', '👤', 'No face detected — look at the camera');
-      setTimeout(runFaceVerification, 2000);
+      if (state.faceResult !== 'pass') {
+        setFaceBadge('checking', '👤', 'No face detected — look directly at camera');
+      } else {
+        setFaceBadge('pass', '✅', 'Face verified ✓');
+      }
     }
   } catch (e) {
-    setTimeout(runFaceVerification, 3000);
+    console.warn('[AirBrush] Face detection error:', e.message);
   }
+
+  // Always reschedule
+  setTimeout(runFaceVerification, 1800);
 }
 
 function euclideanDist(a, b) {
@@ -414,27 +490,43 @@ btnVerify.addEventListener('click', () => {
   hideError(err2);
   const method = state.user.method;
 
-  // ── 1. Gesture check ──
+  // 1. Gesture check
   let gesturePass = false;
-
   if (method === 'pin') {
     gesturePass = verifyPIN(state.pinDigits, state.user.authData);
   } else {
     gesturePass = verifyPath(state.drawPoints, state.user.authData);
   }
 
-  // ── 2. Face check ──
-  const facePass = state.faceResult === 'pass';
+  // 2. Face check — accept if current OR best distance passes threshold
+  const facePass = state.faceResult === 'pass' || _bestFaceDist < state.FACE_THRESHOLD;
 
-  // ── 3. Decision ──
+  // 3. Decision
   if (gesturePass && facePass) {
     goToSuccess();
   } else if (!gesturePass && !facePass) {
-    goToFail('Both your gesture and face verification failed. Please try again.');
+    const bestScore = (1 - _bestFaceDist).toFixed(2);
+    const need = (1 - state.FACE_THRESHOLD).toFixed(2);
+    goToFail(
+      `Both gesture and face verification failed.\n\n` +
+      `Face: best score was ${bestScore} (need >${need})\n` +
+      `Tips: ensure good front lighting, look directly at camera, wait for ✅ before clicking Verify.\n\n` +
+      `Gesture: redraw slowly and clearly in the same shape as sign-up.`
+    );
   } else if (!gesturePass) {
-    goToFail('Gesture verification failed. Your drawing or PIN didn\'t match. Please try again.');
+    goToFail('Gesture verification failed.\n\nTip: draw the same shape at roughly the same position and speed as you did at sign-up.');
   } else {
-    goToFail('Face verification failed. Make sure your face is clearly visible and try again.');
+    const bestScore = (1 - _bestFaceDist).toFixed(2);
+    const need = (1 - state.FACE_THRESHOLD).toFixed(2);
+    goToFail(
+      `Face verification failed.\n\n` +
+      `Best score: ${bestScore}  (need >${need})\n\n` +
+      `Tips:\n` +
+      `• Ensure light is on your face, not behind you\n` +
+      `• Look directly into the camera\n` +
+      `• Wait until the badge shows ✅ before clicking Verify\n` +
+      `• If this keeps failing, sign up again under better lighting`
+    );
   }
 });
 
@@ -463,7 +555,7 @@ function verifyPath(drawnPoints, storedPoints) {
   }
   const avgDist = total / N;
 
-  console.log(`Path similarity distance: ${avgDist.toFixed(3)} (threshold: ${state.PATH_THRESHOLD})`);
+  console.log(`[AirBrush] Path distance: ${avgDist.toFixed(3)} (threshold: ${state.PATH_THRESHOLD})`);
   return avgDist < state.PATH_THRESHOLD;
 }
 
@@ -522,13 +614,11 @@ function goToSuccess() {
   document.getElementById('success-name').textContent =
     `Welcome back, ${state.user.name}! 👋`;
 
-  // Save session
   sessionStorage.setItem('airbrush_session', JSON.stringify({
     email: state.user.email,
     name:  state.user.name,
   }));
 
-  // Animate redirect bar then navigate
   requestAnimationFrame(() => {
     document.getElementById('redirect-fill').style.width = '100%';
   });
@@ -545,7 +635,6 @@ function goToFail(reason) {
 
 btnRetry.addEventListener('click', () => {
   stepFail.style.display = 'none';
-  // Reset state
   state.drawPoints = [];
   state.overlayStrokes = [];
   state.currentOverlayStroke = null;
@@ -553,11 +642,11 @@ btnRetry.addEventListener('click', () => {
   state.pinCurrentDigit = 0;
   state.pinCurrentCount = -1;
   state.faceResult = null;
+  _bestFaceDist = Infinity;
   clearPinTimer();
   btnVerify.disabled = true;
   btnStart.disabled  = false;
   btnStop.disabled   = true;
-  // Reset PIN display
   for (let i = 0; i < 4; i++) {
     const el = document.getElementById(`pd${i}`);
     el.textContent = '_';
@@ -568,14 +657,17 @@ btnRetry.addEventListener('click', () => {
 
 btnBack.addEventListener('click', () => {
   stopCamera();
+  _bestFaceDist = Infinity;
   step2El.style.display = 'none';
   step1El.style.display = 'flex';
 });
 
 // ── HELPERS ──────────────────────────────
 function stopCamera() {
+  state.faceLoopRunning = false;
   if (webcamEl.srcObject)
     webcamEl.srcObject.getTracks().forEach(t => t.stop());
+  webcamEl.srcObject = null;
 }
 
 function setStatus(type, msg) {
