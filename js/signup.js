@@ -1,18 +1,19 @@
 // ═══════════════════════════════════════════
-//  AIRBRUSH — signup.js  (v4 — lag-free)
-//  Root cause of lag fixed:
-//   • overlayCanvas is resized ONCE on camera
-//     start, NOT inside the per-frame callback
-//   • Hand results → store state only
-//   • requestAnimationFrame drives all rendering
-//   • startDrawing / stopDrawing are instant sync
-//   • Face loop decoupled from hand loop
+//  AIRBRUSH — signup.js  (v5 — all bugs fixed)
+//  Fixes applied:
+//   • trackingEnabled flag stops gesture/PIN
+//     detection when Stop button is clicked
+//   • clearPinTimer() called on stop
+//   • handsInstance stored so camera can be
+//     properly halted
+//   • Video visibility forced on camera start
 // ═══════════════════════════════════════════
 
 const state = {
   name: '', email: '', method: '',
   authData: null, faceDescriptor: null,
   isDrawing: false,
+  trackingEnabled: false,          // ★ FIX: gate all gesture detection
   drawPoints: [], overlayStrokes: [], currentOverlayStroke: null,
   handVisible: false,
   pinDigits: [], pinCurrentDigit: 0, pinCurrentCount: -1,
@@ -21,6 +22,8 @@ const state = {
   wasPinching: false, gestureHoldFrames: 0,
   latestLandmarks: null,
   latestHandResults: null,
+  handsInstance: null,
+  cameraInstance: null,
 };
 
 // ── DOM REFS ─────────────────────────────
@@ -120,6 +123,7 @@ function initDrawCanvas() {
 async function startCamera() {
   setStatus('loading', 'Loading AI models…');
   state.faceLoopRunning = false;
+  state.trackingEnabled = false;   // ★ always start with tracking OFF
 
   try {
     const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
@@ -145,10 +149,10 @@ async function startCamera() {
     minTrackingConfidence: 0.5,
   });
   hands.onResults(onHandResults);
+  state.handsInstance = hands;
 
   const camera = new Camera(webcamEl, {
     onFrame: async () => {
-      // ★ KEY FIX: Only resize when dimensions actually changed
       const vw = webcamEl.videoWidth  || 640;
       const vh = webcamEl.videoHeight || 480;
       if (overlayCanvas.width !== vw || overlayCanvas.height !== vh) {
@@ -159,15 +163,25 @@ async function startCamera() {
     },
     width: 640, height: 480,
   });
+  state.cameraInstance = camera;
 
   camera.start().then(() => {
     state.cameraReady = true;
+    // ★ FIX: force video element to be visible
+    webcamEl.style.display    = 'block';
+    webcamEl.style.opacity    = '1';
+    webcamEl.style.visibility = 'visible';
+
     setStatus('loading', 'Camera ready — scanning for your face…');
     if (!state.faceLoopRunning) {
       state.faceLoopRunning = true;
       captureFaceLoop();
     }
-    if (state.method === 'pin') updatePinUI();
+    if (state.method === 'pin') {
+      updatePinUI();
+      // ★ FIX for PIN: auto-enable tracking when camera starts
+      state.trackingEnabled = true;
+    }
   }).catch(e => {
     setStatus('error', 'Camera access denied. Allow webcam and reload.');
     showError(err2, e.message);
@@ -205,10 +219,13 @@ function renderFrame() {
   drawLandmarks(overlayCtx, lm,
     { color: '#06B6D4', lineWidth: 1, radius: 3 });
 
-  if (state.method === 'pin') {
-    handlePIN(state.latestHandResults);
-  } else {
-    handleGestureDrawing(lm);
+  // ★ FIX: Only process gestures when tracking is enabled
+  if (state.trackingEnabled) {
+    if (state.method === 'pin') {
+      handlePIN(state.latestHandResults);
+    } else {
+      handleGestureDrawing(lm);
+    }
   }
   redrawOverlayTrail();
 }
@@ -286,7 +303,8 @@ function handleGestureDrawing(lm) {
 // ★ Pure sync — no async, no RAF, no DOM reflows
 function _startDrawing() {
   if (state.isDrawing) return;
-  state.isDrawing   = true;
+  state.isDrawing      = true;
+  state.trackingEnabled = true;   // ★ enable tracking on start
   state.currentOverlayStroke = null;
   btnStart.disabled = true;
   btnStop.disabled  = false;
@@ -295,7 +313,9 @@ function _startDrawing() {
 
 function _stopDrawing() {
   if (!state.isDrawing) return;
-  state.isDrawing = false;
+  state.isDrawing       = false;
+  state.trackingEnabled = false;  // ★ disable tracking on stop
+  clearPinTimer();                // ★ also clear any PIN timer
   if (state.currentOverlayStroke && state.currentOverlayStroke.length > 1)
     state.overlayStrokes.push([...state.currentOverlayStroke]);
   state.currentOverlayStroke = null;
@@ -349,18 +369,25 @@ btnClear.addEventListener('click', () => {
 
 // ── DONE / SAVE ──────────────────────────
 btnDone.addEventListener('click', () => {
-  if (!state.faceDescriptor)
-    return showError(err2, 'Face not captured yet. Look directly at camera and wait for ✅.');
   if (state.method !== 'pin' && state.drawPoints.length < 10)
-    return showError(err2, 'Please draw your signature/pattern first.');
+    return showError(err2, 'Drawing too short — draw more to register.');
   if (state.method === 'pin' && state.pinDigits.length < 4)
-    return showError(err2, 'Please enter all 4 PIN digits first.');
+    return showError(err2, 'PIN incomplete — enter all 4 digits.');
+  if (!state.faceDescriptor)
+    return showError(err2, 'Face not captured yet — look at the camera.');
+  hideError(err2);
   saveUser();
 });
 
 // ── PIN ───────────────────────────────────
 function handlePIN(results) {
+  // ★ FIX: don't process if PIN is already complete
   if (state.pinCurrentDigit >= 4) return;
+  if (!results.multiHandLandmarks || !results.multiHandLandmarks.length) {
+    document.getElementById('finger-count').textContent = 0;
+    clearPinTimer();
+    return;
+  }
   let total = 0;
   results.multiHandLandmarks.forEach((lm, i) => {
     total += countFingers(lm, results.multiHandedness[i].label);
@@ -393,7 +420,8 @@ function countFingers(lm, handedness) {
 
 function clearPinTimer() {
   if (state.pinTimer) { clearInterval(state.pinTimer); state.pinTimer = null; }
-  document.getElementById('pin-timer-wrap').style.display = 'none';
+  const tw = document.getElementById('pin-timer-wrap');
+  if (tw) tw.style.display = 'none';
 }
 
 function confirmPinDigit(value) {
@@ -406,6 +434,9 @@ function confirmPinDigit(value) {
   state.pinCurrentDigit++;
   state.pinCurrentCount = -1;
   if (state.pinCurrentDigit >= 4) {
+    // ★ FIX: disable tracking once PIN is complete
+    state.trackingEnabled = false;
+    clearPinTimer();
     setStatus('ready', 'PIN entered ✓  Click Done to save.');
     document.getElementById('pin-current').textContent = 'PIN complete! ✓';
     btnDone.disabled = false;
@@ -444,17 +475,19 @@ async function captureFaceLoop() {
       } else {
         faceBadge.className  = 'face-badge pass';
         faceIcon.textContent = '✅';
-        faceStat.textContent = 'Face ready ✓';
+        faceStat.textContent = 'Face locked in ✓';
       }
     } else {
-      faceBadge.className  = 'face-badge checking';
-      faceIcon.textContent = '👤';
-      faceStat.textContent = 'No face detected — look at camera';
+      if (!state.faceDescriptor) {
+        faceBadge.className  = 'face-badge checking';
+        faceIcon.textContent = '👤';
+        faceStat.textContent = 'Look at the camera…';
+      }
     }
-  } catch(e) {
+  } catch (e) {
     console.warn('[signup] face error:', e.message);
   }
-  setTimeout(captureFaceLoop, 1800);
+  setTimeout(captureFaceLoop, 1500);
 }
 
 // ── SAVE USER ─────────────────────────────
@@ -483,6 +516,8 @@ btnBack.addEventListener('click', () => {
 
 function stopCamera() {
   state.faceLoopRunning = false;
+  state.trackingEnabled = false;   // ★ always disable tracking on camera stop
+  clearPinTimer();
   if (webcamEl.srcObject) webcamEl.srcObject.getTracks().forEach(t => t.stop());
   webcamEl.srcObject = null;
 }
