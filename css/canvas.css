@@ -174,17 +174,14 @@
    CENTRE: WEBCAM — SQUARE
    ════════════════════════════════════════ */
 .cam-panel {
-  flex-shrink: 0;
+  flex: 1;
   display: flex;
   flex-direction: column;
   background: #09090f;
   border-right: 1px solid var(--border);
   padding: 0.6rem;
   gap: 0.4rem;
-  /* Square: width = available height of viewport minus navbar */
-  width: calc(100vh - 54px - 1.2rem);
-  max-width: min(400px, 40vw);
-  min-width: 220px;
+  min-width: 0;
 }
 
 .cam-panel-label {
@@ -192,11 +189,11 @@
   text-transform: uppercase; color: var(--text-3); flex-shrink: 0;
 }
 
-/* ★ SQUARE webcam */
+/* ★ Webcam 4:3 */
 .cam-frame-box {
   position: relative;
   width: 100%;
-  aspect-ratio: 1 / 1;   /* perfect square */
+  aspect-ratio: 4 / 3;
   background: #111;
   border-radius: 14px;
   overflow: hidden;
@@ -259,11 +256,11 @@
   text-transform: uppercase; color: var(--text-3);
 }
 
-/* ★ SQUARE draw canvas — same dimensions as webcam */
+/* ★ Draw canvas 4:3 — matches webcam */
 .draw-frame-box {
   position: relative;
   width: 100%;
-  aspect-ratio: 1 / 1;   /* perfect square, matches webcam */
+  aspect-ratio: 4 / 3;
   background: #fff;
   border-radius: 14px;
   overflow: hidden;
