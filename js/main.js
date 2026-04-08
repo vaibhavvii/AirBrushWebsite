@@ -1,112 +1,207 @@
-// ═══════════════════════════════════════════
-//  AIRBRUSH — main.js
-// ═══════════════════════════════════════════
+/* ═══════════════════════════════════════════
+   AIRBRUSH — main.js
+   ═══════════════════════════════════════════ */
 
-// ── NAVBAR SCROLL EFFECT ─────────────────
-const navbar = document.getElementById('navbar');
-window.addEventListener('scroll', () => {
-  navbar.classList.toggle('scrolled', window.scrollY > 60);
-});
-
-// ── SCROLL REVEAL ────────────────────────
-const reveals = document.querySelectorAll('.reveal');
-const revealObserver = new IntersectionObserver((entries) => {
-  entries.forEach((entry, i) => {
-    if (entry.isIntersecting) {
-      // Stagger delay based on sibling index
-      const siblings = [...entry.target.parentElement.children];
-      const idx = siblings.indexOf(entry.target);
-      const delay = Math.min(idx * 80, 400);
-      setTimeout(() => {
-        entry.target.classList.add('visible');
-      }, delay);
-      revealObserver.unobserve(entry.target);
-    }
-  });
-}, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
-
-reveals.forEach(el => revealObserver.observe(el));
-
-// ── SMOOTH SCROLL FOR ANCHOR LINKS ───────
-document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-  anchor.addEventListener('click', function (e) {
-    e.preventDefault();
-    const target = document.querySelector(this.getAttribute('href'));
-    if (target) {
-      const offset = 80; // navbar height
-      const top = target.getBoundingClientRect().top + window.pageYOffset - offset;
-      window.scrollTo({ top, behavior: 'smooth' });
-    }
-  });
-});
-
-// ── PARTICLES BACKGROUND ─────────────────
-const canvas = document.getElementById('particles-canvas');
-const ctx = canvas.getContext('2d');
-
-let width, height, particles;
-
-function resize() {
-  width = canvas.width = window.innerWidth;
-  height = canvas.height = window.innerHeight;
+// ── Auth state ──────────────────────────────
+function isLoggedIn() {
+  return !!localStorage.getItem('airbrush_user');
 }
 
-function randomBetween(a, b) {
-  return a + Math.random() * (b - a);
-}
-
-function createParticles() {
-  const count = Math.floor((width * height) / 18000);
-  particles = Array.from({ length: count }, () => ({
-    x: randomBetween(0, width),
-    y: randomBetween(0, height),
-    r: randomBetween(0.6, 2.2),
-    vx: randomBetween(-0.25, 0.25),
-    vy: randomBetween(-0.35, -0.05),
-    alpha: randomBetween(0.15, 0.7),
-    color: Math.random() > 0.5 ? '124,58,237' : '6,182,212',
-  }));
-}
-
-function drawParticles() {
-  ctx.clearRect(0, 0, width, height);
-  particles.forEach(p => {
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(${p.color},${p.alpha})`;
-    ctx.fill();
-
-    p.x += p.vx;
-    p.y += p.vy;
-
-    // Reset particle when it drifts off screen
-    if (p.y < -5) { p.y = height + 5; p.x = randomBetween(0, width); }
-    if (p.x < -5) { p.x = width + 5; }
-    if (p.x > width + 5) { p.x = -5; }
-  });
-
-  // Draw faint connecting lines between nearby particles
-  for (let i = 0; i < particles.length; i++) {
-    for (let j = i + 1; j < particles.length; j++) {
-      const dx = particles[i].x - particles[j].x;
-      const dy = particles[i].y - particles[j].y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < 100) {
-        const opacity = (1 - dist / 100) * 0.08;
-        ctx.beginPath();
-        ctx.moveTo(particles[i].x, particles[i].y);
-        ctx.lineTo(particles[j].x, particles[j].y);
-        ctx.strokeStyle = `rgba(124,58,237,${opacity})`;
-        ctx.lineWidth = 0.5;
-        ctx.stroke();
-      }
-    }
+// ── Navbar: update based on login state ─────
+function updateNavAuth() {
+  const loginBtn  = document.getElementById('nav-login-btn');
+  const signupBtn = document.getElementById('nav-signup-btn');
+  if (!loginBtn) return;
+  if (isLoggedIn()) {
+    loginBtn.textContent  = 'App';
+    loginBtn.href         = 'canvas.html';
+    signupBtn.textContent = 'Log Out';
+    signupBtn.href        = '#';
+    signupBtn.onclick     = () => { localStorage.removeItem('airbrush_user'); location.reload(); };
   }
+}
+updateNavAuth();
 
-  requestAnimationFrame(drawParticles);
+// ── Start Now button ────────────────────────
+const startNowBtn = document.getElementById('start-now-btn');
+if (startNowBtn) {
+  startNowBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (isLoggedIn()) {
+      window.location.href = 'canvas.html';
+    } else {
+      window.location.href = 'signup.html';
+    }
+  });
 }
 
-window.addEventListener('resize', () => { resize(); createParticles(); });
-resize();
-createParticles();
-drawParticles();
+// ── Particles ───────────────────────────────
+(function initParticles() {
+  const canvas = document.getElementById('particles-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  let W, H, particles = [];
+  const resize = () => { W = canvas.width = innerWidth; H = canvas.height = innerHeight; };
+  resize(); window.addEventListener('resize', resize);
+  for (let i = 0; i < 80; i++) {
+    particles.push({ x: Math.random()*W, y: Math.random()*H, r: Math.random()*1.5+0.5, vx: (Math.random()-.5)*0.3, vy: (Math.random()-.5)*0.3, a: Math.random() });
+  }
+  function draw() {
+    ctx.clearRect(0,0,W,H);
+    particles.forEach(p => {
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+      ctx.fillStyle = `rgba(124,58,237,${p.a * 0.5})`; ctx.fill();
+      p.x += p.vx; p.y += p.vy;
+      if (p.x<0) p.x=W; if (p.x>W) p.x=0;
+      if (p.y<0) p.y=H; if (p.y>H) p.y=0;
+    });
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+// ── Scroll Reveal ───────────────────────────
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+}, { threshold: 0.12 });
+document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+// ── Animated Counters ───────────────────────
+function animateCounter(el) {
+  const target = parseInt(el.dataset.target);
+  let current = 0;
+  const step = target / 60;
+  const timer = setInterval(() => {
+    current += step;
+    if (current >= target) { el.textContent = target.toLocaleString(); clearInterval(timer); return; }
+    el.textContent = Math.floor(current).toLocaleString();
+  }, 16);
+}
+const counterObserver = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) { animateCounter(e.target); counterObserver.unobserve(e.target); } });
+});
+document.querySelectorAll('.stat-number').forEach(el => counterObserver.observe(el));
+
+// ── Tab Switcher (Makers section) ───────────
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    const tab = document.getElementById('tab-' + btn.dataset.tab);
+    if (tab) tab.classList.add('active');
+
+    // Load section images
+    const imgEl = tab.querySelector('img');
+    if (!imgEl) {
+      const img = document.createElement('img');
+      img.src = `assets/sections/${btn.dataset.tab}.jpg`;
+      img.onerror = () => tab.querySelector('div').textContent = `Add image: assets/sections/${btn.dataset.tab}.jpg`;
+      tab.innerHTML = '';
+      tab.appendChild(img);
+    }
+  });
+  // Auto-load first tab image
+  if (btn.classList.contains('active')) btn.click();
+});
+
+// ── Homepage Images → Scroll Gallery ────────
+// Add your images to assets/homepage images/ and list them here:
+const homepageImages = [
+  // 'assets/homepage images/1.jpg',
+  // 'assets/homepage images/2.jpg',
+  // etc.
+];
+(function buildScrollGallery() {
+  const track = document.getElementById('gallery-track');
+  if (!track || homepageImages.length === 0) return;
+  // Duplicate for seamless loop
+  const imgs = [...homepageImages, ...homepageImages];
+  imgs.forEach(src => {
+    const img = document.createElement('img');
+    img.src = src; img.alt = 'AirBrush creation';
+    track.appendChild(img);
+  });
+})();
+
+// ── Homepage Images → Collage ────────────────
+(function buildCollage() {
+  const grid = document.getElementById('collage-grid');
+  if (!grid || homepageImages.length === 0) return;
+  grid.innerHTML = '';
+  homepageImages.slice(0, 3).forEach(src => {
+    const img = document.createElement('img');
+    img.src = src; grid.appendChild(img);
+  });
+})();
+
+// ── Gallery Section ──────────────────────────
+function loadGallery() {
+  const area = document.getElementById('gallery-area');
+  if (!area) return;
+  const saved = JSON.parse(localStorage.getItem('airbrush_gallery') || '[]');
+  if (saved.length === 0) {
+    area.innerHTML = `<div class="gallery-empty">
+      <p style="font-size:1.2rem;margin-bottom:1rem;">Create your own Art Gallery Here</p>
+      <a href="${isLoggedIn() ? 'canvas.html' : 'signup.html'}">Start Drawing →</a>
+    </div>`;
+    return;
+  }
+  const track = document.createElement('div');
+  track.className = 'gallery-track';
+  saved.forEach((item, i) => {
+    const card = document.createElement('div');
+    card.className = 'gallery-card';
+    card.innerHTML = `
+      <img src="${item.image}" alt="Generated art"/>
+      <div class="gallery-card-info">
+        <p>${item.description || 'No description'}</p>
+        <button onclick="viewGalleryDetail(${i})" class="btn-nav-ghost" style="margin-top:0.4rem;font-size:0.75rem;">View Details</button>
+      </div>`;
+    track.appendChild(card);
+  });
+  area.appendChild(track);
+}
+loadGallery();
+
+window.viewGalleryDetail = function(i) {
+  const saved = JSON.parse(localStorage.getItem('airbrush_gallery') || '[]');
+  const item = saved[i];
+  if (!item) return;
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:999;display:flex;align-items:center;justify-content:center;gap:2rem;padding:2rem;';
+  overlay.innerHTML = `
+    <div style="background:var(--bg2);border-radius:var(--radius-lg);padding:1.5rem;max-width:400px;width:100%;">
+      <p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:0.5rem;">Original Sketch</p>
+      <img src="${item.sketch || ''}" style="width:100%;border-radius:var(--radius);border:1px solid var(--border);" onerror="this.style.display='none'"/>
+    </div>
+    <div style="background:var(--bg2);border-radius:var(--radius-lg);padding:1.5rem;max-width:400px;width:100%;">
+      <p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:0.5rem;">Generated Image</p>
+      <img src="${item.image}" style="width:100%;border-radius:var(--radius);"/>
+      <p style="margin-top:1rem;color:var(--text-muted);font-size:0.9rem;">${item.description || 'No description entered.'}</p>
+      <button onclick="this.closest('div').parentElement.remove()" style="margin-top:1rem;background:var(--accent1);border:none;color:#fff;padding:0.5rem 1.5rem;border-radius:8px;cursor:pointer;">Close</button>
+    </div>`;
+  document.body.appendChild(overlay);
+};
+
+// ── Gallery Nav btn: smooth scroll ──────────
+document.getElementById('gallery-nav-btn')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  document.getElementById('gallery')?.scrollIntoView({ behavior: 'smooth' });
+});
+
+// ── QR Code (footer) ────────────────────────
+window.addEventListener('load', () => {
+  if (typeof QRCode !== 'undefined') {
+    new QRCode(document.getElementById('qr-canvas'), {
+      text: 'https://air-brush-website.vercel.app',
+      width: 80, height: 80,
+      colorDark: '#7C3AED', colorLight: 'transparent'
+    });
+  }
+});
+
+// ── Navbar scroll style ──────────────────────
+window.addEventListener('scroll', () => {
+  document.getElementById('navbar')?.classList.toggle('scrolled', scrollY > 40);
+});
