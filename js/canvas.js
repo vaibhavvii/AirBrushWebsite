@@ -355,7 +355,7 @@ async function generateImage(sketchBase64, prompt, style) {
   // For sketch-to-image fidelity, we use the sketch as the init image.
 
   // ⚠️ REPLACE with your Hugging Face API token:
-  const HF_TOKEN = 'YOUR_HUGGING_FACE_API_TOKEN';
+  const HF_TOKEN = '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';
 
   // Use a ControlNet scribble model for best sketch fidelity
   const MODEL = 'lllyasviel/sd-controlnet-scribble'; // or 'runwayml/stable-diffusion-v1-5' with img2img
