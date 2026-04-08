@@ -15,7 +15,23 @@
 <!-- NAVBAR -->
 <nav class="navbar" id="navbar">
   <div class="nav-logo">
-    <div class="logo-icon"><!-- SVG same as before --></div>
+    <div class="logo-icon">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="15" stroke="url(#lg1)" stroke-width="1.5"/>
+        <path d="M8 22 Q12 10 16 14 Q20 18 24 8" stroke="url(#lg2)" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+        <circle cx="24" cy="8" r="2.5" fill="url(#lg2)"/>
+        <defs>
+          <linearGradient id="lg1" x1="0" y1="0" x2="32" y2="32">
+            <stop offset="0%" stop-color="#7C3AED"/>
+            <stop offset="100%" stop-color="#06B6D4"/>
+          </linearGradient>
+          <linearGradient id="lg2" x1="8" y1="22" x2="24" y2="8">
+            <stop offset="0%" stop-color="#7C3AED"/>
+            <stop offset="100%" stop-color="#06B6D4"/>
+          </linearGradient>
+        </defs>
+      </svg>
+    </div>
     <span class="logo-text">Airbrush</span>
   </div>
   <div class="nav-links">
@@ -38,7 +54,7 @@
   </div>
   <div class="hero-content">
     <p class="hero-slogan reveal">Think it. Trace it. See it. Your imagination, now in motion.</p>
-    <h1 class="hero-title reveal grad-text">The no-touch<br/>art machine.</h1>
+    <h1 class="hero-title reveal">The no-touch<br/><span class="grad-text">art machine.</span></h1>
     <p class="hero-tagline reveal">Who needs a mouse anyway?</p>
     <div class="hero-cta reveal">
       <a href="#" class="btn-primary" id="start-now-btn">Start Now</a>
@@ -49,7 +65,7 @@
 <!-- SCROLL ANIMATION GALLERY -->
 <section class="scroll-gallery" id="scroll-gallery">
   <div class="scroll-gallery-track" id="gallery-track">
-    <!-- images dynamically inserted from homepage images/ folder -->
+    <!-- dynamically populated from homepageImages array in main.js -->
   </div>
 </section>
 
@@ -79,7 +95,7 @@
   </div>
 </section>
 
-<!-- CREATE ART WITHOUT LIMITS (SPLIT SECTION) -->
+<!-- CREATE ART WITHOUT LIMITS -->
 <section class="section" id="create-section">
   <div class="container">
     <div class="split-section">
@@ -89,10 +105,7 @@
       </div>
       <div class="split-right reveal">
         <div class="collage-grid" id="collage-grid">
-          <!-- images dynamically inserted from homepage images/ folder -->
-          <div style="background:var(--bg3);border-radius:var(--radius);aspect-ratio:2/3;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:0.8rem;">Image 1</div>
-          <div style="background:var(--bg3);border-radius:var(--radius);aspect-ratio:1;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:0.8rem;">Image 2</div>
-          <div style="background:var(--bg3);border-radius:var(--radius);aspect-ratio:1;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:0.8rem;">Image 3</div>
+          <div class="collage-placeholder">Add images to assets/homepage images/</div>
         </div>
       </div>
     </div>
@@ -104,24 +117,50 @@
   <div class="container">
     <div class="section-label reveal">Crafted for</div>
     <h2 class="section-title reveal">Crafted for<br/><span class="grad-text">intuitive creation</span></h2>
+
     <div class="tab-bar reveal">
       <button class="tab-btn active" data-tab="artists">Artists</button>
       <button class="tab-btn" data-tab="designers">Designers</button>
       <button class="tab-btn" data-tab="photographers">Photographers</button>
       <button class="tab-btn" data-tab="marketers">Marketers</button>
     </div>
+
+    <!-- ARTISTS -->
     <div class="tab-content active" id="tab-artists">
-      <div style="background:var(--bg3);border-radius:var(--radius-lg);aspect-ratio:16/7;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-muted);">Add image to assets/sections/artists.jpg</div>
+      <div class="section-images-grid">
+        <img src="assets/sections/artists-1.webp" alt="Artist creation 1"/>
+        <img src="assets/sections/artists-2.avif" alt="Artist creation 2"/>
+        <img src="assets/sections/artists-3.avif" alt="Artist creation 3"/>
+      </div>
     </div>
+
+    <!-- DESIGNERS -->
     <div class="tab-content" id="tab-designers">
-      <div style="background:var(--bg3);border-radius:var(--radius-lg);aspect-ratio:16/7;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-muted);">Add image to assets/sections/designers.jpg</div>
+      <div class="section-images-grid">
+        <img src="assets/sections/designers-1.avif" alt="Designer creation 1"/>
+        <img src="assets/sections/designers-2.avif" alt="Designer creation 2"/>
+        <img src="assets/sections/designers-3.avif" alt="Designer creation 3"/>
+      </div>
     </div>
+
+    <!-- PHOTOGRAPHERS -->
     <div class="tab-content" id="tab-photographers">
-      <div style="background:var(--bg3);border-radius:var(--radius-lg);aspect-ratio:16/7;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-muted);">Add image to assets/sections/photographers.jpg</div>
+      <div class="section-images-grid">
+        <img src="assets/sections/photographers-2.avif" alt="Photographer creation 1"/>
+        <img src="assets/sections/photographers-3.avif" alt="Photographer creation 2"/>
+        <img src="assets/sections/photographers-4.avif" alt="Photographer creation 3"/>
+      </div>
     </div>
+
+    <!-- MARKETERS -->
     <div class="tab-content" id="tab-marketers">
-      <div style="background:var(--bg3);border-radius:var(--radius-lg);aspect-ratio:16/7;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-muted);">Add image to assets/sections/marketers.jpg</div>
+      <div class="section-images-grid">
+        <img src="assets/sections/marketers-1.avif" alt="Marketer creation 1"/>
+        <img src="assets/sections/marketers-2.jpg"  alt="Marketer creation 2"/>
+        <img src="assets/sections/marketers-3.jpg"  alt="Marketer creation 3"/>
+      </div>
     </div>
+
   </div>
 </section>
 
@@ -155,6 +194,23 @@
   <div class="container footer-inner">
     <div class="footer-brand">
       <div class="nav-logo" style="margin-bottom:0.75rem;">
+        <div class="logo-icon">
+          <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+            <circle cx="16" cy="16" r="15" stroke="url(#flg1)" stroke-width="1.5"/>
+            <path d="M8 22 Q12 10 16 14 Q20 18 24 8" stroke="url(#flg2)" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+            <circle cx="24" cy="8" r="2.5" fill="url(#flg2)"/>
+            <defs>
+              <linearGradient id="flg1" x1="0" y1="0" x2="32" y2="32">
+                <stop offset="0%" stop-color="#7C3AED"/>
+                <stop offset="100%" stop-color="#06B6D4"/>
+              </linearGradient>
+              <linearGradient id="flg2" x1="8" y1="22" x2="24" y2="8">
+                <stop offset="0%" stop-color="#7C3AED"/>
+                <stop offset="100%" stop-color="#06B6D4"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
         <span class="logo-text">Airbrush</span>
       </div>
       <p class="footer-tagline">Gestures become art.<br/>Air becomes your studio.</p>
@@ -180,7 +236,7 @@
     </div>
   </div>
   <div class="footer-qr">
-    <canvas id="qr-canvas"></canvas>
+    <div id="qr-canvas"></div>
     <div class="footer-brand-big">
       Airbrush.ai by vb
       <span>The no-touch art machine</span>
@@ -188,7 +244,6 @@
   </div>
 </footer>
 
-<!-- QR library -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="js/main.js"></script>
 </body>
