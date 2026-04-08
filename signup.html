@@ -4,196 +4,66 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Sign Up — AirBrush</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css"/>
-  <link rel="stylesheet" href="css/signup.css"/>
 </head>
-<body class="auth-body">
+<body>
+<div class="auth-page">
+  <div class="auth-card">
+    <h2>Create Account</h2>
+    <p>Join Airbrush — your no-touch art studio.</p>
 
-  <!-- NAVBAR -->
-  <nav class="navbar" id="navbar">
-    <a href="index.html" class="nav-logo">
-      <div class="logo-icon">
-        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-          <circle cx="16" cy="16" r="15" stroke="url(#lg1)" stroke-width="1.5"/>
-          <path d="M8 22 Q12 10 16 14 Q20 18 24 8" stroke="url(#lg2)" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-          <circle cx="24" cy="8" r="2.5" fill="url(#lg2)"/>
-          <defs>
-            <linearGradient id="lg1" x1="0" y1="0" x2="32" y2="32">
-              <stop offset="0%" stop-color="#7C3AED"/>
-              <stop offset="100%" stop-color="#06B6D4"/>
-            </linearGradient>
-            <linearGradient id="lg2" x1="8" y1="22" x2="24" y2="8">
-              <stop offset="0%" stop-color="#7C3AED"/>
-              <stop offset="100%" stop-color="#06B6D4"/>
-            </linearGradient>
-          </defs>
-        </svg>
-      </div>
-      <span class="logo-text">AirBrush</span>
-    </a>
-    <a href="login.html" class="btn-nav-ghost">Already have an account? Log In</a>
-  </nav>
+    <div class="auth-method-tabs">
+      <button class="auth-method-btn active" data-method="email">📧 Email</button>
+      <button class="auth-method-btn" data-method="pattern">🔷 Air Pattern</button>
+      <button class="auth-method-btn" data-method="pin">🔢 Air PIN</button>
+    </div>
 
-  <!-- ══════════════════════════════════
-       STEP 1 — DETAILS + METHOD SELECT
-  ══════════════════════════════════ -->
-  <div class="auth-wrap" id="step1">
-    <div class="auth-card">
-      <div class="auth-header">
-        <div class="step-dots">
-          <span class="dot active"></span>
-          <span class="dot"></span>
-          <span class="dot"></span>
-        </div>
-        <h1 class="auth-title">Create your account</h1>
-        <p class="auth-sub">Choose how you want to secure it — using your hand.</p>
-      </div>
-
-      <!-- Name + Email -->
+    <!-- Email Signup -->
+    <div id="method-email">
       <div class="form-group">
-        <label>Full Name</label>
-        <input type="text" id="inp-name" placeholder="e.g. Vaibhav" autocomplete="off"/>
+        <label>Email</label>
+        <input type="email" id="su-email" placeholder="you@example.com"/>
       </div>
       <div class="form-group">
-        <label>Email Address</label>
-        <input type="email" id="inp-email" placeholder="e.g. you@email.com" autocomplete="off"/>
+        <label>Password</label>
+        <input type="password" id="su-password" placeholder="Min 6 characters"/>
       </div>
-
-      <!-- Auth Method -->
-      <div class="method-label">Choose your authentication method</div>
-      <div class="method-grid">
-        <div class="method-card" data-method="sign">
-          <div class="method-icon">✍️</div>
-          <h3>Signature</h3>
-          <p>Draw your unique air signature</p>
-        </div>
-        <div class="method-card" data-method="pattern">
-          <div class="method-icon">🔷</div>
-          <h3>Pattern</h3>
-          <p>Draw a secret gesture pattern</p>
-        </div>
-        <div class="method-card" data-method="pin">
-          <div class="method-icon">🔢</div>
-          <h3>Finger PIN</h3>
-          <p>Set a 4-digit PIN with raised fingers</p>
-        </div>
+      <div class="form-group">
+        <label>Confirm Password</label>
+        <input type="password" id="su-confirm" placeholder="Repeat password"/>
       </div>
-
-      <div id="step1-error" class="error-msg" style="display:none;"></div>
-      <button class="btn-primary btn-full" id="btn-step1-next">Continue →</button>
+      <button class="btn-submit" id="email-signup-btn">Create Account</button>
     </div>
-  </div>
 
-  <!-- ══════════════════════════════════
-       STEP 2 — WEBCAM AUTH SETUP
-  ══════════════════════════════════ -->
-  <div class="auth-wrap" id="step2" style="display:none;">
-    <div class="auth-card auth-card-wide">
-      <div class="auth-header">
-        <div class="step-dots">
-          <span class="dot"></span>
-          <span class="dot active"></span>
-          <span class="dot"></span>
-        </div>
-        <h1 class="auth-title" id="step2-title">Set up your Signature</h1>
-        <p class="auth-sub" id="step2-sub">Draw your signature in the air using your index finger</p>
+    <!-- Air Pattern Signup -->
+    <div id="method-pattern" style="display:none;">
+      <p class="gesture-instruction">Draw your unlock pattern with your index finger in the air.</p>
+      <div class="gesture-webcam-box" id="pattern-webcam-box">
+        <video id="pattern-video" autoplay muted playsinline></video>
+        <canvas id="pattern-canvas"></canvas>
       </div>
-
-      <!-- Status bar -->
-      <div class="status-bar" id="status-bar">
-        <span class="status-dot" id="status-dot"></span>
-        <span id="status-text">Loading camera & AI models...</span>
-      </div>
-
-      <!-- Webcam + Canvas area -->
-      <div class="cam-area">
-
-        <!-- LEFT: webcam with skeleton overlay -->
-        <div class="cam-box">
-          <p class="cam-label">📷 Webcam — Hand Tracking</p>
-          <div class="cam-frame">
-            <video id="webcam" autoplay muted playsinline></video>
-            <canvas id="overlay-canvas"></canvas>
-            <!-- Face capture (hidden) -->
-            <canvas id="face-canvas" style="display:none;"></canvas>
-          </div>
-          <!-- Face capture badge — shows face detected status -->
-          <div class="face-badge" id="face-badge">
-            <span id="face-icon">👤</span>
-            <span id="face-status">Look at camera to capture face…</span>
-          </div>
-        </div>
-
-        <!-- RIGHT: drawing canvas (Sign/Pattern) OR PIN display -->
-        <div class="cam-box" id="draw-box">
-          <p class="cam-label">🎨 Your Drawing Canvas</p>
-          <div class="cam-frame">
-            <canvas id="draw-canvas"></canvas>
-          </div>
-        </div>
-
-        <!-- PIN display (shown only for PIN mode) -->
-        <div class="cam-box" id="pin-box" style="display:none;">
-          <p class="cam-label">🔢 Finger PIN</p>
-          <div class="pin-display">
-            <div class="pin-digits" id="pin-digits">
-              <div class="pin-digit" id="pd0">_</div>
-              <div class="pin-digit" id="pd1">_</div>
-              <div class="pin-digit" id="pd2">_</div>
-              <div class="pin-digit" id="pd3">_</div>
-            </div>
-            <div class="pin-info">
-              <div class="pin-current" id="pin-current">Entering digit 1 of 4</div>
-              <div class="pin-fingers" id="pin-fingers">Fingers detected: <strong id="finger-count">0</strong></div>
-              <div class="pin-timer" id="pin-timer-wrap" style="display:none;">
-                Confirming in <strong id="pin-timer">3</strong>s...
-              </div>
-            </div>
-          </div>
-        </div>
-
-      </div><!-- end cam-area -->
-
-      <!-- Controls for Sign/Pattern (drawing is auto-detected on pinch) -->
-      <div class="ctrl-row" id="draw-controls">
-        <button class="btn-ctrl blue" id="btn-clear-draw">🗑 Clear Drawing</button>
-      </div>
-
-      <!-- Controls for PIN (auto mode — no start/stop needed) -->
-      <div class="ctrl-row" id="pin-controls" style="display:none;">
-        <div class="pin-hint">Hold up fingers on one or both hands. The count is summed automatically.</div>
-      </div>
-
-      <div id="step2-error" class="error-msg" style="display:none;"></div>
-
-      <div class="auth-actions">
-        <button class="btn-ghost" id="btn-back">← Back</button>
-        <button class="btn-primary" id="btn-done" disabled>Done — Save Auth ✓</button>
-      </div>
+      <button class="btn-submit" id="pattern-start-btn">Start Camera & Draw Pattern</button>
+      <button class="btn-submit" id="pattern-save-btn" style="display:none;margin-top:0.75rem;background:linear-gradient(135deg,#22c55e,#16a34a);">Save Pattern & Sign Up</button>
     </div>
-  </div>
 
-  <!-- ══════════════════════════════════
-       STEP 3 — SUCCESS
-  ══════════════════════════════════ -->
-  <div class="auth-wrap" id="step3" style="display:none;">
-    <div class="auth-card auth-card-center">
-      <div class="success-icon">✅</div>
-      <h1 class="auth-title">Account Created!</h1>
-      <p class="auth-sub">Your gesture auth and face ID have been saved.<br/>Please log in to access your canvas.</p>
-      <a href="login.html" class="btn-primary btn-full" style="margin-top:2rem; display:block; text-align:center;">
-        Go to Login →
-      </a>
+    <!-- Air PIN Signup -->
+    <div id="method-pin" style="display:none;">
+      <p class="gesture-instruction">Hold up fingers to set each digit of your 4-digit PIN. Each digit is confirmed after a 3-second hold.</p>
+      <div class="gesture-webcam-box" id="pin-webcam-box">
+        <video id="pin-video" autoplay muted playsinline></video>
+        <canvas id="pin-canvas"></canvas>
+      </div>
+      <div id="pin-display" style="text-align:center;font-size:2rem;letter-spacing:1rem;margin:1rem 0;color:var(--accent2);">_ _ _ _</div>
+      <button class="btn-submit" id="pin-start-btn">Start Camera & Set PIN</button>
+      <button class="btn-submit" id="pin-save-btn" style="display:none;margin-top:0.75rem;background:linear-gradient(135deg,#22c55e,#16a34a);">Save PIN & Sign Up</button>
     </div>
-  </div>
 
-  <!-- MediaPipe + face-api CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
-  <script src="js/signup.js"></script>
+    <p style="text-align:center;color:var(--text-muted);font-size:0.85rem;margin-top:1.5rem;">
+      Already have an account? <a href="login.html" style="color:var(--accent2);">Log In</a>
+    </p>
+  </div>
+</div>
+<script src="js/auth.js"></script>
 </body>
 </html>
